@@ -76,7 +76,8 @@ export default function HomePage() {
     };
 
     //영상 캡차 검증
-    const submitCaptcha = async () => {
+    const submitCaptcha = async (clickTime) => {
+        setClickTime(clickTime);
         const res = await fetch(`${API}/mvcaptcha/verify`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -260,8 +261,7 @@ export default function HomePage() {
 
                                             const t = video.currentTime;
                                             video.pause();
-                                            setClickTime(t);
-                                            submitCaptcha();
+                                            submitCaptcha(t);
                                         }}
                                     />
                                 )}
