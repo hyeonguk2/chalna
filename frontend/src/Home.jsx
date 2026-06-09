@@ -21,7 +21,8 @@ export default function HomePage() {
     const [result, setResult] = useState(null);
     const [started, setStarted] = useState(false);
     const [guideText, setGuideText] = useState("");
-    
+    const [clickTime, setClickTime] = useState("");
+
     // 문자 캡차 불러오기
     const loadCaptcha = async () => {
         const res = await fetch(`${API}/ocrcaptcha`);
@@ -75,7 +76,7 @@ export default function HomePage() {
     };
 
     //영상 캡차 검증
-    const submitCaptcha = async (clickTime) => {
+    const submitCaptcha = async () => {
         const res = await fetch(`${API}/mvcaptcha/verify`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -97,7 +98,7 @@ export default function HomePage() {
     useEffect(() => {
         if (!started || !videoUrl || !videoRef.current) return;
 
-        const url = `http://localhost:3001${videoUrl}`;
+        const url = `${API}${videoUrl}`;
 
         videoRef.current.src = url;
         videoRef.current.load();
@@ -259,7 +260,8 @@ export default function HomePage() {
 
                                             const t = video.currentTime;
                                             video.pause();
-                                            submitCaptcha(t);
+                                            setClickTime(t);
+                                            submitCaptcha();
                                         }}
                                     />
                                 )}
@@ -270,10 +272,29 @@ export default function HomePage() {
                                         </div>
                                     </div>
                                 )}
-
+                                {/* 성공 - 다시시도 없음 */}
+                                {/*
                                 {result === "success" && (
                                     <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-green-400 text-2xl font-bold z-20">
                                         성공
+                                    </div>
+
+                                )} */}
+                                {/* 성공 - 다시시도 있음 */}
+                                {result === "success" && (
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
+                                        <div className="text-green-400 text-2xl font-bold mb-4">
+                                            성공
+                                        </div>
+                                        <div className="text-2xl font-bold mb-4">
+                                            {clickTime.toFixed(2)}초
+                                        </div>
+                                        <button
+                                            onClick={reset}
+                                            className="px-5 py-2 bg-white text-black rounded-xl"
+                                        >
+                                            다시 시도
+                                        </button>
                                     </div>
                                 )}
 
@@ -282,7 +303,9 @@ export default function HomePage() {
                                         <div className="text-red-400 text-2xl font-bold mb-4">
                                             실패
                                         </div>
-
+                                        <div className="text-2xl font-bold mb-4">
+                                            {clickTime.toFixed(2)}초
+                                        </div>
                                         <button
                                             onClick={reset}
                                             className="px-5 py-2 bg-white text-black rounded-xl"
