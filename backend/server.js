@@ -1,6 +1,7 @@
 const express = require("express");
 const mysql = require("mysql2");
 const cors = require("cors");
+const path = require("path");
 require("dotenv").config();
 
 const app = express();
@@ -44,6 +45,7 @@ db.connect((err) => {
     });
 });
 
+// 회원가입
 app.post("/signup", (req, res) => {
     const { userid, email, password } = req.body;
 
@@ -51,6 +53,7 @@ app.post("/signup", (req, res) => {
         "INSERT INTO users (userid, password, email) VALUES (?, ?, ?)";
 
     db.query(sql, [userid, password, email], (err, result) => {
+
         if (err && err.code === "ER_DUP_ENTRY") {
             return res.status(409).send("duplicate");
         }
@@ -64,6 +67,21 @@ app.post("/signup", (req, res) => {
     });
 });
 
+app.use(express.json());
+// 라우터 연결
+app.use("/ocrcaptcha", require("./routes/ocrcaptcha"));
+
+app.use(
+    "/videos",
+    express.static(path.join(__dirname, "public/videos"))
+);
+
+app.use("/mvcaptcha", require("./routes/mvcaptcha"));
+
+const cleanupCaptcha = require("./routes/cleanupCaptcha");
+cleanupCaptcha(db);
+
+// 서버 시작
 const port = process.env.PORT || 3001;
 
 app.listen(port, () => {
