@@ -22,36 +22,13 @@ export default function HomePage() {
     const [started, setStarted] = useState(false);
     const [guideText, setGuideText] = useState("");
     const [clickTime, setClickTime] = useState("");
+    const [captchaopen, setCaptchaopen] = useState(false);
+    const [selected, setSelected] = useState(null);
 
-    // 문자 캡차 불러오기
-    const loadCaptcha = async () => {
-        const res = await fetch(`${API}/ocrcaptcha`);
-        const data = await res.json();
-
-        setCaptcha(data);
+    const openVideoCaptcha = async () => {
+        setCaptchaopen(true);
     };
 
-    // 문자 캡차 검증
-    const verify = async () => {
-        const res = await fetch(`${API}/ocrcaptcha/verify`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                captchaId: captcha.captchaId,
-                answer: input
-            })
-        });
-
-        const result = await res.text();
-
-        if (result === "success") {
-            alert("통과");
-            setOpen(false);
-        } else {
-            alert("실패");
-            loadCaptcha(); // 새 문제
-        }
-    };
 
     //영상 캡차 불러오기
     const startCaptcha = async () => {
@@ -172,51 +149,164 @@ export default function HomePage() {
                         </p>
 
                         <div className="flex gap-4">
-                            {/* 버튼 */}
                             <button
-                                onClick={() => {
-                                    setOpen(true);
-                                    loadCaptcha();
-                                }}
-                                className="px-6 py-3 rounded-2xl bg-white text-black font-medium hover:opacity-90 transition"
+                                onClick={openVideoCaptcha}
+                                className="px-6 py-3 rounded-2xl bg-white text-black font-medium"
                             >
                                 데모 시작
                             </button>
-                            {/* 모달 */}
-                            {open && (
-                                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                                    <div className="bg-white p-6 rounded-xl w-80">
-
-                                        <h2 className="mb-3 font-bold">
-                                            캡차 인증
-                                        </h2>
-
-                                        {captcha && (
-                                            <img
-                                                src={captcha.image}
-                                                alt="captcha"
-                                                className="mb-3"
+                            {captchaopen && (
+                                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+                                    <div className="bg-zinc-900 p-6 rounded-2xl w-[800px] max-w-[95vw]">
+                                        <div className="aspect-video relative overflow-hidden rounded-xl">
+                                            {/* 영상 */}
+                                            <video
+                                                ref={videoRef}
+                                                muted
+                                                playsInline
+                                                className="w-full h-full object-cover"
                                             />
-                                        )}
 
-                                        <input
-                                            value={input}
-                                            onChange={(e) => setInput(e.target.value)}
-                                            className="border p-2 text-black w-full mb-3"
-                                            placeholder="입력"
-                                        />
+                                            {started && result === null && (
+                                                <div
+                                                    className="absolute inset-0 z-10"
+                                                    onClick={() => {
+                                                        const video = videoRef.current;
 
-                                        <div className="flex gap-2">
+                                                        if (!video) return;
+                                                        if (video.readyState < 2) return; // 핵심 방어
+
+                                                        const t = video.currentTime;
+                                                        video.pause();
+                                                        submitCaptcha(t);
+                                                    }}
+                                                />
+                                            )}
+                                            {started && result === null && (
+                                                <>
+                                                    <div className="absolute top-4 left-0 w-full z-30 pointer-events-none">
+                                                        <div className="mx-auto w-fit max-w-[90%] bg-black/50 text-white text-sm px-3 py-1 rounded-lg">
+                                                            {guideText}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="absolute bottom-4 left-4 right-4 z-30 grid grid-cols-2 gap-2">
+                                                        <button
+                                                            className="bg-zinc-800 p-3 rounded"
+                                                            onClick={() => {
+                                                                const t = videoRef.current.currentTime;
+                                                                submitCaptcha(t, "강아지");
+                                                            }}
+                                                        >
+                                                            강아지
+                                                        </button>
+
+                                                        <button
+                                                            className="bg-zinc-800 p-3 rounded"
+                                                            onClick={() => {
+                                                                const t = videoRef.current.currentTime;
+                                                                submitCaptcha(t, "고양이");
+                                                            }}
+                                                        >
+                                                            고양이
+                                                        </button>
+
+                                                        <button
+                                                            className="bg-zinc-800 p-3 rounded"
+                                                            onClick={() => {
+                                                                const t = videoRef.current.currentTime;
+                                                                submitCaptcha(t, "자동차");
+                                                            }}
+                                                        >
+                                                            자동차
+                                                        </button>
+
+                                                        <button
+                                                            className="bg-zinc-800 p-3 rounded"
+                                                            onClick={() => {
+                                                                const t = videoRef.current.currentTime;
+                                                                submitCaptcha(t, "사람");
+                                                            }}
+                                                        >
+                                                            사람
+                                                        </button>
+                                                    </div>
+                                                </>
+                                            )}
+
+                                            {/* 성공 - 다시시도 없음 */}
+                                            {/*
+                                {result === "success" && (
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-green-400 text-2xl font-bold z-20">
+                                        성공
+                                    </div>
+
+                                )} */}
+                                            {/* 성공 - 다시시도 있음 */}
+                                            {result === "success" && (
+                                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
+                                                    <div className="text-green-400 text-2xl font-bold mb-4">
+                                                        성공
+                                                    </div>
+                                                    <div className="text-2xl font-bold mb-4">
+                                                        {clickTime.toFixed(2)}초
+                                                    </div>
+                                                    <button
+                                                        onClick={reset}
+                                                        className="px-5 py-2 bg-white text-black rounded-xl"
+                                                    >
+                                                        다시 시도
+                                                    </button>
+                                                </div>
+                                            )}
+
+                                            {result === "fail" && (
+                                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
+                                                    <div className="text-red-400 text-2xl font-bold mb-4">
+                                                        실패
+                                                    </div>
+                                                    <div className="text-2xl font-bold mb-4">
+                                                        {clickTime.toFixed(2)}초
+                                                    </div>
+                                                    <button
+                                                        onClick={reset}
+                                                        className="px-5 py-2 bg-white text-black rounded-xl"
+                                                    >
+                                                        다시 시도
+                                                    </button>
+                                                </div>
+                                            )}
+
+                                            {!started && (
+                                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 text-center px-6 z-20">
+                                                    <div className="text-6xl mb-4">🐶</div>
+
+                                                    <p className="text-lg font-medium mb-2">
+                                                        영상 CAPTCHA
+                                                    </p>
+
+                                                    <p className="text-sm text-zinc-400 mb-4">
+                                                        나오는 문장에 맞춰 특정 순간에 화면을 클릭하세요.
+                                                    </p>
+
+                                                    <button
+                                                        onClick={startCaptcha}
+                                                        className="px-6 py-2 bg-white text-black rounded-xl"
+                                                    >
+                                                        시작
+                                                    </button>
+                                                </div>
+                                            )}
+
+                                        </div>
+
+                                        <div className="flex justify-end mt-4">
                                             <button
-                                                onClick={verify}
-                                                className="bg-black text-white px-3 py-2 rounded"
-                                            >
-                                                확인
-                                            </button>
-
-                                            <button
-                                                onClick={() => setOpen(false)}
-                                                className="border px-3 text-black py-2 rounded"
+                                                onClick={() => {
+                                                    reset();
+                                                    setCaptchaopen(false);
+                                                }}
+                                                className="px-4 py-2 bg-white text-black rounded"
                                             >
                                                 닫기
                                             </button>
@@ -225,7 +315,6 @@ export default function HomePage() {
                                     </div>
                                 </div>
                             )}
-
                             <button className="px-6 py-3 rounded-2xl border border-zinc-700 hover:border-zinc-500 transition">
                                 자세히 보기
                             </button>
@@ -249,93 +338,17 @@ export default function HomePage() {
                                     playsInline
                                     className="w-full h-full object-cover"
                                 />
+                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 text-center px-6 z-20">
+                                    <div className="text-6xl mb-4">🐶</div>
 
-                                {started && result === null && (
-                                    <div
-                                        className="absolute inset-0 z-10"
-                                        onClick={() => {
-                                            const video = videoRef.current;
+                                    <p className="text-lg font-medium mb-2">
+                                        영상 CAPTCHA
+                                    </p>
 
-                                            if (!video) return;
-                                            if (video.readyState < 2) return; // 핵심 방어
-
-                                            const t = video.currentTime;
-                                            video.pause();
-                                            submitCaptcha(t);
-                                        }}
-                                    />
-                                )}
-                                {started && result === null && (
-                                    <div className="absolute top-4 left-0 w-full z-30 pointer-events-none">
-                                        <div className="mx-auto w-fit max-w-[90%] bg-black/50 text-white text-sm px-3 py-1 rounded-lg">
-                                            {guideText}
-                                        </div>
-                                    </div>
-                                )}
-                                {/* 성공 - 다시시도 없음 */}
-                                {/*
-                                {result === "success" && (
-                                    <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-green-400 text-2xl font-bold z-20">
-                                        성공
-                                    </div>
-
-                                )} */}
-                                {/* 성공 - 다시시도 있음 */}
-                                {result === "success" && (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
-                                        <div className="text-green-400 text-2xl font-bold mb-4">
-                                            성공
-                                        </div>
-                                        <div className="text-2xl font-bold mb-4">
-                                            {clickTime.toFixed(2)}초
-                                        </div>
-                                        <button
-                                            onClick={reset}
-                                            className="px-5 py-2 bg-white text-black rounded-xl"
-                                        >
-                                            다시 시도
-                                        </button>
-                                    </div>
-                                )}
-
-                                {result === "fail" && (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
-                                        <div className="text-red-400 text-2xl font-bold mb-4">
-                                            실패
-                                        </div>
-                                        <div className="text-2xl font-bold mb-4">
-                                            {clickTime.toFixed(2)}초
-                                        </div>
-                                        <button
-                                            onClick={reset}
-                                            className="px-5 py-2 bg-white text-black rounded-xl"
-                                        >
-                                            다시 시도
-                                        </button>
-                                    </div>
-                                )}
-
-                                {!started && (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 text-center px-6 z-20">
-                                        <div className="text-6xl mb-4">🐶</div>
-
-                                        <p className="text-lg font-medium mb-2">
-                                            영상 CAPTCHA
-                                        </p>
-
-                                        <p className="text-sm text-zinc-400 mb-4">
-                                            나오는 문장에 맞춰 특정 순간에 화면을 클릭하세요.
-                                        </p>
-
-                                        <button
-                                            onClick={startCaptcha}
-                                            className="px-6 py-2 bg-white text-black rounded-xl"
-                                        >
-                                            시작
-                                        </button>
-                                    </div>
-                                )}
-
+                                    <p className="text-sm text-zinc-400 mb-4">
+                                        시연연상 넣을곳
+                                    </p>
+                                </div>
 
                             </div>
                         </div>
