@@ -1,4 +1,3 @@
 {
-  "video1": { "answerTime": 1.6, "text": "축구공이 중앙에 왔을때 클릭하세요",  "active": true },
-  "video2": { "answerTime": 3.1, "text": "축구공이 중앙에 왔을때 클릭하세요",  "active": false }
+  "word2": {"type":"B","level":1,"question": "영상에 나오는 문제의 정답을 맞추시오", "badtime": 1, "answer": "테이블", "options":["레이블","케이블","테이프"], "active": true }
 }

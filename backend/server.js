@@ -25,15 +25,16 @@ db.connect((err) => {
 
     console.log("mysql connected");
 
-    // 테이블 자동 생성
+    // 테이블 자동 생성 (login_attempts 추가)
     const createTable = `
-        CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            userid VARCHAR(50) UNIQUE,
-            email VARCHAR(100) UNIQUE,
-            password VARCHAR(255)
-        )
-    `;
+    CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        userid VARCHAR(50) UNIQUE,
+        email VARCHAR(100) UNIQUE,
+        password VARCHAR(255),
+        login_attempts INT DEFAULT 0
+    )
+`;
 
     db.query(createTable, (err) => {
         if (err) {
@@ -69,7 +70,6 @@ app.post("/signup", (req, res) => {
 
 app.use(express.json());
 // 라우터 연결
-app.use("/ocrcaptcha", require("./routes/ocrcaptcha"));
 
 app.use(
     "/videos",

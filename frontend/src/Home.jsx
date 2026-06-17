@@ -4,34 +4,35 @@ import { useRef, useState, useEffect } from "react";
 export default function HomePage() {
     const API = import.meta.env.VITE_API_URL;
 
-    const videoRef = useRef(null);
-    const startTimeRef = useRef(null);
+    //모달용
+    const videoRef = useRef(null); //영상모듈
+    const [videoUrl, setVideoUrl] = useState(null); //영상 링크 - 보안문제 해결필요!
+    const [captchaopen, setCaptchaopen] = useState(false); //모달 창 상태
+    const [started, setStarted] = useState(false); //영상 시작
+    const [ended, setEnded] = useState(false); //모달 영상 종료상태
+    const [result, setResult] = useState(null); //실패,성공 문자
+    const [endedTime, setEndedTime] = useState(null);
+    const [remainTime, setRemainTime] = useState(0);
 
-    const [isPlaying, setisPlaying] = useState(false);
-
+    //캡챠데이터용
+    const [captchaId, setCaptchaId] = useState(null); //문제 고유id
+    const [options, setOptions] = useState([]);  //문제 선택지
+    const [guideText, setGuideText] = useState(""); //영상 위 문자
     const [startTime, setStartTime] = useState(null);
-    const [reactionTime, setReactionTime] = useState(null);
+    const [badTime, setBadTime] = useState(null);
 
-    const [open, setOpen] = useState(false);
-    const [captcha, setCaptcha] = useState(null);
-    const [input, setInput] = useState("");
+    const [userId, setUserId] = useState("a");       // 💡 테스트용 임의 ID 저장 변수 추가
 
-    const [captchaId, setCaptchaId] = useState(null);
-    const [videoUrl, setVideoUrl] = useState(null);
-    const [result, setResult] = useState(null);
-    const [started, setStarted] = useState(false);
-    const [guideText, setGuideText] = useState("");
-    const [clickTime, setClickTime] = useState("");
-    const [captchaopen, setCaptchaopen] = useState(false);
-    const [selected, setSelected] = useState(null);
+
 
     const openVideoCaptcha = async () => {
         setCaptchaopen(true);
     };
 
-
     //영상 캡차 불러오기
-    const startCaptcha = async () => {
+    const startCaptcha = async (userId) => {
+        if (!userId) return;
+
         const res = await fetch(`${API}/mvcaptcha`);
         const data = await res.json();
 
@@ -45,22 +46,50 @@ export default function HomePage() {
         });
 
         const videoData = await videoRes.json();
-
+        setEnded(false);
         setVideoUrl(videoData.video);   // ★ 중요
-        setGuideText(data.text);
+        setGuideText(data.question);
         setCaptchaId(data.captchaId);   // ★ 중요
+        setOptions(data.options);   // ★ 중요
+        setBadTime(data.badTime);
         setStarted(true);
     };
 
+    // 정답 전송
+    const handleAnswer = (answer) => {
+        if (!startTime) return;
+
+        // 1. 버튼을 누른 순간 타이머가 돌지 못하도록 endedTime을 즉시 비웁니다. (중요!)
+        setEndedTime(null);
+
+        const timeDiffMs = Date.now() - startTime;
+        const t = timeDiffMs / 1000;
+
+        // 2. 만약 영상이 끝난 후에 누른 거였다면 (남아있던 remainTime 기반으로 체크)
+        // 5초 타임아웃 처리는 타이머 useEffect가 아니라 여기서 직접 계산해 자릅니다.
+        if (ended && remainTime <= 0) {
+            setResult("fail");
+            return;
+        }
+
+        const video = videoRef.current;
+        if (video) {
+            video.pause();
+        }
+        console.log(t);
+        // 정답 전송
+        submitCaptcha(t, answer);
+    };
+
     //영상 캡차 검증
-    const submitCaptcha = async (clickTime) => {
-        setClickTime(clickTime);
+    const submitCaptcha = async (t, answer) => {
         const res = await fetch(`${API}/mvcaptcha/verify`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 captchaId,
-                clickTime
+                answer,
+                userId: userId
             })
         });
 
@@ -73,6 +102,7 @@ export default function HomePage() {
         }
     };
 
+    // 비디오 모듈 제어 및 시작 시간 기록
     useEffect(() => {
         if (!started || !videoUrl || !videoRef.current) return;
 
@@ -80,9 +110,51 @@ export default function HomePage() {
 
         videoRef.current.src = url;
         videoRef.current.load();
-        videoRef.current.play();
+
+        // 영상이 재생되는 순간의 타임스탬프를 기록
+        videoRef.current.play().then(() => {
+            setStartTime(Date.now());
+        }).catch(err => console.log("자동 재생 차단 또는 오류:", err));
+
     }, [started, videoUrl]);
 
+    // 5초 카운트다운 및 0초 도달 시 자동 실패 처리
+    useEffect(() => {
+        if (!endedTime) return;
+
+        const timer = setInterval(() => {
+            const totalDuration = 5000;
+            const elapsed = Date.now() - endedTime;
+            const remain = Math.max(0, totalDuration - elapsed);
+
+            const remainSeconds = remain / 1000; // 밀리초를 초 단위로 변환
+
+            if (remainSeconds <= 1.0) {
+                // 1초 이하일 때는 소수점 첫째 자리까지 표현 (예: 0.9, 0.8 ... 0.0)
+                setRemainTime(remainSeconds.toFixed(1));
+            } else {
+                // 1초 초과일 때는 올림(Math.ceil) 처리하여 정수로 표현 (예: 5, 4, 3, 2)
+                setRemainTime(Math.ceil(remainSeconds));
+            }
+            // 0초에 도달했을 때
+            if (remain <= 0 || remain < setBadTime ) {
+                clearInterval(timer);
+                setEndedTime(null); // 0초가 되어 종료될 때도 확실하게 비워줌
+
+                const video = videoRef.current;
+                let currentVideoTime = 0;
+                if (video && video.readyState >= 2) {
+                    currentVideoTime = video.currentTime;
+                    video.pause();
+                }
+                submitCaptcha(currentVideoTime, "");
+            }
+        }, 50);
+
+        return () => clearInterval(timer);
+    }, [endedTime]);
+
+    //영상 초기화
     const reset = () => {
         const video = videoRef.current;
         if (!video) return;
@@ -93,12 +165,16 @@ export default function HomePage() {
             video.load();
             video.currentTime = 0;
         }
-
+        setEndedTime(null);
+        setRemainTime(0);
         setStarted(false);
         setResult(null);
         setVideoUrl(null);
+        setOptions([]);
         setGuideText("");
+        setStartTime(null);
     };
+
 
     return (
 
@@ -164,77 +240,47 @@ export default function HomePage() {
                                                 ref={videoRef}
                                                 muted
                                                 playsInline
+                                                onEnded={() => {
+                                                    setEnded(true);
+                                                    setEndedTime(Date.now());
+                                                    setRemainTime(5);
+                                                }}
                                                 className="w-full h-full object-cover"
                                             />
-
-                                            {started && result === null && (
-                                                <div
-                                                    className="absolute inset-0 z-10"
-                                                    onClick={() => {
-                                                        const video = videoRef.current;
-
-                                                        if (!video) return;
-                                                        if (video.readyState < 2) return; // 핵심 방어
-
-                                                        const t = video.currentTime;
-                                                        video.pause();
-                                                        submitCaptcha(t);
-                                                    }}
-                                                />
-                                            )}
                                             {started && result === null && (
                                                 <>
                                                     <div className="absolute top-4 left-0 w-full z-30 pointer-events-none">
-                                                        <div className="mx-auto w-fit max-w-[90%] bg-black/50 text-white text-sm px-3 py-1 rounded-lg">
-                                                            {guideText}
+                                                        <div className="mx-auto w-fit max-w-[90%] bg-black/50 text-white text-xl px-3 py-1 rounded-lg">
+                                                            {ended ? "" : guideText}
                                                         </div>
                                                     </div>
-
-                                                    <div className="absolute bottom-4 left-4 right-4 z-30 grid grid-cols-2 gap-2">
-                                                        <button
-                                                            className="bg-zinc-800 p-3 rounded"
-                                                            onClick={() => {
-                                                                const t = videoRef.current.currentTime;
-                                                                submitCaptcha(t, "강아지");
-                                                            }}
-                                                        >
-                                                            강아지
-                                                        </button>
-
-                                                        <button
-                                                            className="bg-zinc-800 p-3 rounded"
-                                                            onClick={() => {
-                                                                const t = videoRef.current.currentTime;
-                                                                submitCaptcha(t, "고양이");
-                                                            }}
-                                                        >
-                                                            고양이
-                                                        </button>
-
-                                                        <button
-                                                            className="bg-zinc-800 p-3 rounded"
-                                                            onClick={() => {
-                                                                const t = videoRef.current.currentTime;
-                                                                submitCaptcha(t, "자동차");
-                                                            }}
-                                                        >
-                                                            자동차
-                                                        </button>
-
-                                                        <button
-                                                            className="bg-zinc-800 p-3 rounded"
-                                                            onClick={() => {
-                                                                const t = videoRef.current.currentTime;
-                                                                submitCaptcha(t, "사람");
-                                                            }}
-                                                        >
-                                                            사람
-                                                        </button>
+                                                    <div className="absolute bottom-4 left-0 right-0 z-30 flex justify-center">
+                                                        <div className="grid grid-cols-4 gap-5 w-[80%]">
+                                                            {options.map((item) => (
+                                                                <button
+                                                                    key={item}
+                                                                    onClick={() => handleAnswer(item)}
+                                                                    className="bg-zinc-800/70 backdrop-blur-sm p-2 rounded text-xl"
+                                                                >
+                                                                    {item}
+                                                                </button>
+                                                            ))}
+                                                        </div>
                                                     </div>
                                                 </>
                                             )}
+                                            {started && ended && result === null && (
+                                                <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-20 pointer-events-none">
+                                                    <div className="text-white text-2xl font-bold">
+                                                        정답을 선택하세요
+                                                    </div>
+                                                    <div className="text-red-400 text-lg font-bold mt-2">
+                                                        {remainTime}초 남음
+                                                    </div>
+                                                </div>
+                                            )}
 
-                                            {/* 성공 - 다시시도 없음 */}
+                                            {/* 성공 시 다시시도 없음 */}
                                             {/*
                                 {result === "success" && (
                                     <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-green-400 text-2xl font-bold z-20">
@@ -242,15 +288,15 @@ export default function HomePage() {
                                     </div>
 
                                 )} */}
-                                            {/* 성공 - 다시시도 있음 */}
+                                            {/* 성공 시 다시시도 있음 */}
                                             {result === "success" && (
                                                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
                                                     <div className="text-green-400 text-2xl font-bold mb-4">
-                                                        성공
+                                                        성공🎉
                                                     </div>
-                                                    <div className="text-2xl font-bold mb-4">
+                                                    {/* <div className="text-2xl font-bold mb-4">
                                                         {clickTime.toFixed(2)}초
-                                                    </div>
+                                                    </div> */}
                                                     <button
                                                         onClick={reset}
                                                         className="px-5 py-2 bg-white text-black rounded-xl"
@@ -265,9 +311,9 @@ export default function HomePage() {
                                                     <div className="text-red-400 text-2xl font-bold mb-4">
                                                         실패
                                                     </div>
-                                                    <div className="text-2xl font-bold mb-4">
+                                                    {/* <div className="text-2xl font-bold mb-4">
                                                         {clickTime.toFixed(2)}초
-                                                    </div>
+                                                    </div> */}
                                                     <button
                                                         onClick={reset}
                                                         className="px-5 py-2 bg-white text-black rounded-xl"
@@ -279,7 +325,7 @@ export default function HomePage() {
 
                                             {!started && (
                                                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 text-center px-6 z-20">
-                                                    <div className="text-6xl mb-4">🐶</div>
+                                                    <div className="text-6xl mb-4">🐱</div>
 
                                                     <p className="text-lg font-medium mb-2">
                                                         영상 CAPTCHA
