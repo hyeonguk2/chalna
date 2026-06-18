@@ -313,14 +313,6 @@ export default function HomePage() {
                                                 </div>
                                             )}
 
-                                            {/* 성공 시 다시시도 없음 */}
-                                            {/*
-                                {result === "success" && (
-                                    <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-green-400 text-2xl font-bold z-20">
-                                        성공
-                                    </div>
-
-                                )} */}
                                             {/* 성공 시 다시시도 있음 */}
                                             {result && (
                                                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
