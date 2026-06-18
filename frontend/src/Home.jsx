@@ -51,7 +51,7 @@ export default function HomePage() {
         setGuideText(data.question);
         setCaptchaId(data.captchaId);   // ★ 중요
         setOptions(data.options);   // ★ 중요
-        setBadTime(data.badTime);
+        setBadTime(data.badtime);
         setStarted(true);
     };
 
@@ -89,17 +89,14 @@ export default function HomePage() {
             body: JSON.stringify({
                 captchaId,
                 answer,
-                userId: userId
+                userId: userId,
+                clickTime:t
             })
         });
 
         const data = await res.json();
-
-        if (data.ok === true) {
-            setResult("success");
-        } else {
-            setResult("fail");
-        }
+        console.log(data.reason);
+        setResult(data.reason || "fail");
     };
 
     // 비디오 모듈 제어 및 시작 시간 기록
@@ -137,7 +134,7 @@ export default function HomePage() {
                 setRemainTime(Math.ceil(remainSeconds));
             }
             // 0초에 도달했을 때
-            if (remain <= 0 || remain < setBadTime ) {
+            if (remain <= 0 || remain < setBadTime) {
                 clearInterval(timer);
                 setEndedTime(null); // 0초가 되어 종료될 때도 확실하게 비워줌
 
@@ -289,31 +286,23 @@ export default function HomePage() {
 
                                 )} */}
                                             {/* 성공 시 다시시도 있음 */}
-                                            {result === "success" && (
+                                            {result && (
                                                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
-                                                    <div className="text-green-400 text-2xl font-bold mb-4">
-                                                        성공🎉
-                                                    </div>
-                                                    {/* <div className="text-2xl font-bold mb-4">
-                                                        {clickTime.toFixed(2)}초
-                                                    </div> */}
-                                                    <button
-                                                        onClick={reset}
-                                                        className="px-5 py-2 bg-white text-black rounded-xl"
+                                                    <div
+                                                        className={`text-2xl font-bold mb-4 ${result === "success"
+                                                                ? "text-green-400"
+                                                                : result === "too_fast"
+                                                                    ? "text-yellow-400"
+                                                                    : "text-red-400"
+                                                            }`}
                                                     >
-                                                        다시 시도
-                                                    </button>
-                                                </div>
-                                            )}
-
-                                            {result === "fail" && (
-                                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
-                                                    <div className="text-red-400 text-2xl font-bold mb-4">
-                                                        실패
+                                                        {result === "success"
+                                                            ? "성공🎉"
+                                                            : result === "too_fast"
+                                                                ? "너무 빠름"
+                                                                : "실패"}
                                                     </div>
-                                                    {/* <div className="text-2xl font-bold mb-4">
-                                                        {clickTime.toFixed(2)}초
-                                                    </div> */}
+
                                                     <button
                                                         onClick={reset}
                                                         className="px-5 py-2 bg-white text-black rounded-xl"

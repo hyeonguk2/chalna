@@ -33,6 +33,7 @@ db.connect((err) => {
         CREATE TABLE IF NOT EXISTS captcha (
             captchaId VARCHAR(100) PRIMARY KEY,
             answer VARCHAR(10),
+            badtime INT,
             video VARCHAR(100),
             created_at BIGINT
         )
@@ -106,14 +107,13 @@ router.get("/", (req, res) => {
     const createdAt = Date.now();
 
     db.query(
-        "INSERT INTO captcha (captchaId, answer, video, created_at) VALUES (?, ?, ?, ?)",
-        [id, answer, randomVideo, createdAt]
+        "INSERT INTO captcha (captchaId, answer, badtime, video, created_at) VALUES (?, ?,?, ?, ?)",
+        [id, answer, badtime, randomVideo, createdAt]
     );
 
     res.json({
         captchaId: id,
         question,
-        badtime,
         options: choices
     });
 });
@@ -161,10 +161,16 @@ router.post("/verify", (req, res) => {
             if (err || rows.length === 0) {
                 return res.json({ ok: false });
             }
-
             const data = rows[0];
+            const badtimeNum = Number(data.badtime);
+            const clickTimeNum = Number(clickTime);
             const correctAnswer = (answer === data.answer);
 
+            // 1. 먼저 시간 체크
+            if (clickTimeNum < badtimeNum) {
+                db.query("DELETE FROM captcha WHERE captchaId = ?", [captchaId]);
+                return res.json({ ok: false, reason: "too_fast" });
+            }
             // ❌ 사용한 캡차 데이터 삭제 (1회성 유지)
             db.query("DELETE FROM captcha WHERE captchaId = ?", [captchaId]);
 
@@ -176,9 +182,9 @@ router.post("/verify", (req, res) => {
                     [userId],
                     (updateErr) => {
                         if (updateErr) console.error("실패 횟수 초기화 실패:", updateErr);
-                        
+
                         // 성공 응답 반환
-                        return res.json({ ok: true });
+                        return res.json({ ok: true, reason: "success" });
                     }
                 );
             } else {
@@ -188,9 +194,9 @@ router.post("/verify", (req, res) => {
                     [userId],
                     (updateErr) => {
                         if (updateErr) console.error("실패 횟수 누적 실패:", updateErr);
-                        
+
                         // 실패 응답 반환
-                        return res.json({ ok: false });
+                        return res.json({ ok: false, reason: "fail" });
                     }
                 );
             }
