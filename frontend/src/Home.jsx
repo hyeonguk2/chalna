@@ -11,19 +11,22 @@ export default function HomePage() {
     const [started, setStarted] = useState(false); //영상 시작
     const [ended, setEnded] = useState(false); //모달 영상 종료상태
     const [result, setResult] = useState(null); //실패,성공 문자
-    const [endedTime, setEndedTime] = useState(null);
-    const [remainTime, setRemainTime] = useState(0);
+    const [endedTime, setEndedTime] = useState(null); //영상 끝난 시간
+    const [remainTime, setRemainTime] = useState(0); //영상 후 5초 타이머
+    const [progress, setProgress] = useState(0); //영상typeA 상태바
 
     //캡챠데이터용
     const [captchaId, setCaptchaId] = useState(null); //문제 고유id
     const [options, setOptions] = useState([]);  //문제 선택지
     const [guideText, setGuideText] = useState(""); //영상 위 문자
-    const [startTime, setStartTime] = useState(null);
-    const [badTime, setBadTime] = useState(null);
+    const [startTime, setStartTime] = useState(null); // 시작시간 
+    const [badTime, setBadTime] = useState(null); // 찍기 및 빠른 클릭 차단
+    const [type, setType] = useState(null); // 영상 타입
 
     const [userId, setUserId] = useState("a");       // 💡 테스트용 임의 ID 저장 변수 추가
 
-
+    //users table 에 login_attempts 컬럼을 임시로 추가했는데 이걸 fk로 따로 테이블 만들어서 연결할지 결정필요
+    //fk로 별도로 만들면 captcha 시도횟수, 시도한 영상 제목이나 유형을 넣을 컬럼이 필요할것같아요.(같은 captcha시도 방지)
 
     const openVideoCaptcha = async () => {
         setCaptchaopen(true);
@@ -52,6 +55,7 @@ export default function HomePage() {
         setCaptchaId(data.captchaId);   // ★ 중요
         setOptions(data.options);   // ★ 중요
         setBadTime(data.badtime);
+        setType(data.type);
         setStarted(true);
     };
 
@@ -90,7 +94,7 @@ export default function HomePage() {
                 captchaId,
                 answer,
                 userId: userId,
-                clickTime:t
+                clickTime: t
             })
         });
 
@@ -114,6 +118,24 @@ export default function HomePage() {
         }).catch(err => console.log("자동 재생 차단 또는 오류:", err));
 
     }, [started, videoUrl]);
+
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+
+        let raf;
+
+        const update = () => {
+            if (video.duration) {
+                setProgress((video.currentTime / video.duration) * 100);
+            }
+            raf = requestAnimationFrame(update);
+        };
+
+        raf = requestAnimationFrame(update);
+
+        return () => cancelAnimationFrame(raf);
+    }, [videoUrl]);
 
     // 5초 카운트다운 및 0초 도달 시 자동 실패 처리
     useEffect(() => {
@@ -162,7 +184,6 @@ export default function HomePage() {
             video.load();
             video.currentTime = 0;
         }
-        setEndedTime(null);
         setRemainTime(0);
         setStarted(false);
         setResult(null);
@@ -170,9 +191,9 @@ export default function HomePage() {
         setOptions([]);
         setGuideText("");
         setStartTime(null);
+        setProgress(0);
+
     };
-
-
     return (
 
         <div className="min-h-screen w-full bg-zinc-950 text-white">
@@ -253,6 +274,21 @@ export default function HomePage() {
                                                     </div>
                                                     <div className="absolute bottom-4 left-0 right-0 z-30 flex justify-center">
                                                         <div className="grid grid-cols-4 gap-5 w-[80%]">
+                                                            {type === "A" && (
+                                                                <div className="absolute bottom-20 left-0 right-0 px-6">
+                                                                    <div className="relative w-full h-2 bg-zinc-700 rounded overflow-hidden">
+                                                                        <div className="absolute inset-0 flex">
+                                                                            {[...Array(4)].map((_, i) => (
+                                                                                <div key={i} className="flex-1 border-r-2 border-zinc-300/70" />
+                                                                            ))}
+                                                                        </div>
+                                                                        <div
+                                                                            className="h-1 bg-white rounded"
+                                                                            style={{ width: `${progress}%` }}
+                                                                        />
+                                                                    </div>
+                                                                </div>
+                                                            )}
                                                             {options.map((item) => (
                                                                 <button
                                                                     key={item}
@@ -290,10 +326,10 @@ export default function HomePage() {
                                                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
                                                     <div
                                                         className={`text-2xl font-bold mb-4 ${result === "success"
-                                                                ? "text-green-400"
-                                                                : result === "too_fast"
-                                                                    ? "text-yellow-400"
-                                                                    : "text-red-400"
+                                                            ? "text-green-400"
+                                                            : result === "too_fast"
+                                                                ? "text-yellow-400"
+                                                                : "text-red-400"
                                                             }`}
                                                     >
                                                         {result === "success"

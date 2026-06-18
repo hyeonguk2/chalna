@@ -97,6 +97,7 @@ router.get("/", (req, res) => {
     const answer = meta[randomVideo].answer;
     const question = meta[randomVideo].question;
     const badtime = meta[randomVideo].badtime;
+    const type = meta[randomVideo].type;
     const choices = [
         answer,
         ...meta[randomVideo].options
@@ -114,7 +115,8 @@ router.get("/", (req, res) => {
     res.json({
         captchaId: id,
         question,
-        options: choices
+        options: choices,
+        type
     });
 });
 
@@ -161,21 +163,22 @@ router.post("/verify", (req, res) => {
             if (err || rows.length === 0) {
                 return res.json({ ok: false });
             }
+
             const data = rows[0];
             const badtimeNum = Number(data.badtime);
             const clickTimeNum = Number(clickTime);
-            const correctAnswer = (answer === data.answer);
 
             // 1. 먼저 시간 체크
             if (clickTimeNum < badtimeNum) {
-                db.query("DELETE FROM captcha WHERE captchaId = ?", [captchaId]);
+                db.query("UPDATE users SET login_attempts = login_attempts + 1 WHERE userId = ?",
+                    [userId]);
                 return res.json({ ok: false, reason: "too_fast" });
             }
             // ❌ 사용한 캡차 데이터 삭제 (1회성 유지)
             db.query("DELETE FROM captcha WHERE captchaId = ?", [captchaId]);
 
             // 2. 캡차 결과에 따른 사용자 실패 횟수 후처리
-            if (correctAnswer) {
+            if (String(answer) === data.answer) {
                 // 캡차 정답 ⭕ : 해당 유저의 로그인 실패 횟수를 0으로 초기화
                 db.query(
                     "UPDATE users SET login_attempts = 0 WHERE userId = ?",
