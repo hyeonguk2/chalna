@@ -1,4 +1,9 @@
-{
-  "video1": { "answerTime": 1.6, "text": "축구공이 중앙에 왔을때 클릭하세요",  "active": true },
-  "video2": { "answerTime": 3.1, "text": "축구공이 중앙에 왔을때 클릭하세요",  "active": false }
+{"_meta": {
+    "A": "TYPE A: 순간포착형",
+    "B": "TYPE B: 단기기억형",
+    "C": "TYPE C: 추론연상형",
+    "D": "TYPE D: 행동탐지형"
+  },
+  "word1": {"type":"B","level":1,"question": "영상에 나오는 문제의 정답을 맞추시오", "badtime": 1, "answer": 8, "options":[9,5,7], "active": true },
+  "word2": {"type":"B","level":1,"question": "영상에 나오는 문제의 단어를 맞추시오", "badtime": 1, "answer": "테이블", "options":["레이블","케이블","테이프"], "active": false }
 }
