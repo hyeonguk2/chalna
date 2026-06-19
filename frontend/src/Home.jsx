@@ -1,5 +1,7 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useRef, useState, useEffect } from "react";
+import img1 from "/1.png";
+import "./App.css";
 
 export default function HomePage() {
     const API = import.meta.env.VITE_API_URL;
@@ -462,6 +464,7 @@ export default function HomePage() {
                             <div className="absolute inset-0 bg-gradient-to-br from-zinc-700/20 to-zinc-900" />
 
                             {/* 초기 화면 */}
+
                             <div className="w-full h-full flex justify-center relative">
 
                                 {/* 영상 */}
@@ -471,6 +474,7 @@ export default function HomePage() {
                                     playsInline
                                     className="w-full h-full object-cover"
                                 />
+
                                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 text-center px-6 z-20">
                                     <div className="text-6xl mb-4">🐶</div>
 
@@ -537,7 +541,7 @@ export default function HomePage() {
             </section>
 
             {/* Demo_ 추가 페이지 틀 */}
-            {/*
+
             <section id="demo" className="border-t border-zinc-800">
                 <div className="max-w-7xl mx-auto px-6 py-24">
                     <div className="text-center max-w-3xl mx-auto">
@@ -550,15 +554,28 @@ export default function HomePage() {
                         </p>
 
                         <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-10">
-                            <div className="aspect-video rounded-2xl bg-zinc-800 flex items-center justify-center mb-6">
+                            <div className="aspect-video rounded-2xl bg-zinc-800 flex items-center justify-center mb-6 relative overflow-hidden">
+
+                                <img
+                                    src="/1.png"
+                                    className="absolute animate-move"
+                                    alt="event"
+                                />
+
+                    
+
+                            </div>
+                            {/* <div className="aspect-video rounded-2xl bg-zinc-800 flex items-center justify-center mb-6">
+                                
                                 <div className="text-center">
+
                                     <div className="text-7xl mb-4">🦴</div>
 
                                     <p className="text-zinc-400 text-sm">
                                         이벤트 발생 대기 중...
                                     </p>
                                 </div>
-                            </div>
+                            </div> */}
 
                             <button className="px-8 py-4 rounded-2xl bg-white text-black font-semibold hover:opacity-90 transition">
                                 이벤트 확인
@@ -566,7 +583,7 @@ export default function HomePage() {
                         </div>
                     </div>
                 </div>
-            </section>*/}
+            </section>
         </div>
     );
 }
