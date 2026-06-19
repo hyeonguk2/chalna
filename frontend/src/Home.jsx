@@ -22,7 +22,6 @@ export default function HomePage() {
     const [startTime, setStartTime] = useState(null); // 시작시간 
     const [badtime, setBadTime] = useState(null); // 찍기 및 빠른 클릭 차단
     const [type, setType] = useState(null); // 영상 타입
-    const [ranges, setRanges] = useState([]);
     const [duration, setDuration] = useState(0);
 
     const [userId, setUserId] = useState("a");       // 💡 테스트용 임의 ID 저장 변수 추가
@@ -60,7 +59,6 @@ export default function HomePage() {
         setOptions(data.options);   // ★ 중요
         setBadTime(data.badtime);
         setType(data.type);
-        setRanges(data.options);
         setStarted(true);
     };
 
@@ -296,11 +294,11 @@ export default function HomePage() {
 
                                                                     {/* 초록 구간 + 숫자 */}
                                                                     {duration > 0 &&
-                                                                        ranges.map((time, idx) => {
+                                                                        options.map((time, idx) => {
                                                                             const left = ((time - 0.2) / duration) * 100;
 
                                                                             return (
-                                                                                <div key={`range-${time}-${idx}`}>
+                                                                                <div key={`options-${time}-${idx}`}>
 
                                                                                     {/* 초록 구간 */}
                                                                                     <div

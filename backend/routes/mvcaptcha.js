@@ -164,7 +164,7 @@ router.post("/video", (req, res) => {
 
             const data = rows[0];
 
-            const videoUrl = `/videos/captchatype/captchatype_${data.captchatype}/${data.video}.mp4`;
+            const videoUrl = `/videos/captchatype/captchatype_${data.captchatype}/video/${data.video}.mp4`;
 
             res.json({
                 video: videoUrl
