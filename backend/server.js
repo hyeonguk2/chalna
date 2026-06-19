@@ -32,6 +32,7 @@ db.connect((err) => {
         userid VARCHAR(50) UNIQUE,
         email VARCHAR(100) UNIQUE,
         password VARCHAR(255),
+        captchatype ENUM('A','B','C','D'),
         login_attempts INT DEFAULT 0
     )
 `;

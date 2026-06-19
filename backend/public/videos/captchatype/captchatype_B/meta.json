@@ -1,0 +1,177 @@
+{
+  "_meta": {
+    "A": "TYPE A: 순간포착형",
+    "B": "TYPE B: 단기기억형",
+    "C": "TYPE C: 추론연상형",
+    "D": "TYPE D: 행동탐지형"
+  },
+  "cal1": {
+    "level": 1,
+    "question": "두 숫자의 합(덧셈)을 고르시오.",
+    "badtime": 1,
+    "answer": "6",
+    "options": ["5", "8", "9"],
+    "active": true
+  },
+  "cal2": {
+    "level": 1,
+    "question": "두 숫자의 차(뺄셈)를 구하시오.",
+    "badtime": 1,
+    "answer": "2",
+    "options": ["4", "6", "3"],
+    "active": true
+  },
+  "cal3": {
+    "level": 1,
+    "question": "두 숫자의 합(덧셈)을 고르시오.",
+    "badtime": 1,
+    "answer": "6",
+    "options": ["2", "4", "8"],
+    "active": true
+  },
+  "cal4": {
+    "level": 1,
+    "question": "두 숫자의 합(덧셈)을 고르시오.",
+    "badtime": 1,
+    "answer": "8",
+    "options": ["7", "9", "11"],
+    "active": true
+  },
+  "cal5": {
+    "level": 1,
+    "question": "두 숫자의 곱(곱셈)을 고르시오.",
+    "badtime": 1,
+    "answer": "6",
+    "options": ["15", "7", "4"],
+    "active": true
+  },
+  "cal6": {
+    "level": 1,
+    "question": "두 숫자의 합(덧셈)을 고르시오.",
+    "badtime": 1,
+    "answer": "7",
+    "options": ["6", "8", "9"],
+    "active": true
+  },
+  "cal7": {
+    "level": 1,
+    "question": "두 숫자의 곱(곱셈)을 고르시오.",
+    "badtime": 1,
+    "answer": "18",
+    "options": ["8", "14", "15"],
+    "active": true
+  },
+  "cal8": {
+    "level": 1,
+    "question": "두 숫자의 합(덧셈)을 고르시오.",
+    "badtime": 1,
+    "answer": "12",
+    "options": ["8", "14", "15"],
+    "active": true
+  },
+  "cal9": {
+    "level": 1,
+    "question": "두 숫자의 곱(곱셈)을 고르시오.",
+    "badtime": 1,
+    "answer": "56",
+    "options": ["49", "15", "10"],
+    "active": true
+  },
+  "cal10": {
+    "level": 1,
+    "question": "두 숫자의 합(덧셈)을 고르시오.",
+    "badtime": 1,
+    "answer": "9",
+    "options": ["7", "8", "10"],
+    "active": true
+  },
+
+  "word1": {
+    "level": 1,
+    "question": "두 글자를 합친 단어를 고르시오.",
+    "badtime": 1,
+    "answer": "토끼",
+    "options": ["토지", "모기", "토시"],
+    "active": true
+  },
+  "word2": {
+    "level": 1,
+    "question": "두 글자를 합친 단어를 고르시오.",
+    "badtime": 1,
+    "answer": "과일",
+    "options": ["과신", "와인", "마일"],
+    "active": true
+  },
+  "word3": {
+    "level": 1,
+    "question": "두 글자를 합친 단어를 고르시오.",
+    "badtime": 1,
+    "answer": "공해",
+    "options": ["동해", "공매", "동애"],
+    "active": true
+  },
+  "word4": {
+    "level": 1,
+    "question": "세 글자를 합친 단어를 고르시오.",
+    "badtime": 1,
+    "answer": "테이블",
+    "options": ["테니스", "책상", "학교"],
+    "active": true
+  },
+  "word5": {
+    "level": 1,
+    "question": "세 글자를 합친 단어를 고르시오.",
+    "badtime": 1,
+    "answer": "냉장고",
+    "options": ["냉장구", "냉우고", "저장고"],
+    "active": true
+  },
+  "word6": {
+    "level": 1,
+    "question": "두 글자를 합친 단어를 고르시오.",
+    "badtime": 1,
+    "answer": "우산",
+    "options": ["가구", "우주", "우리"],
+    "active": true
+  },
+  "word7": {
+    "level": 1,
+    "question": "두 글자를 합친 단어를 고르시오.",
+    "badtime": 1,
+    "answer": "바다",
+    "options": ["강물", "도구함", "도서"],
+    "active": true
+  },
+  "word8": {
+    "level": 1,
+    "question": "두 글자를 합친 단어를 고르시오.",
+    "badtime": 1,
+    "answer": "캠핑",
+    "options": ["캠프", "핑크", "컴퓨터"],
+    "active": true
+  },
+  "word9": {
+    "level": 1,
+    "question": "두 글자를 합친 단어를 고르시오.",
+    "badtime": 1,
+    "answer": "카페",
+    "options": ["카누", "페코", "코코"],
+    "active": true
+  },
+  "word10": {
+    "level": 1,
+    "question": "두 글자를 합친 단어를 고르시오.",
+    "badtime": 1,
+    "answer": "병원",
+    "options": ["정원", "인원", "구원"],
+    "active": true
+  },
+  "word11": {
+    "level": 1,
+    "question": "두 글자를 합친 단어를 고르시오.",
+    "badtime": 1,
+    "answer": "사과",
+    "options": ["사자", "가사", "과일"],
+    "active": true
+  }
+}

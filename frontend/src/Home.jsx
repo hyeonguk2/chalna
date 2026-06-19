@@ -20,8 +20,10 @@ export default function HomePage() {
     const [options, setOptions] = useState([]);  //문제 선택지
     const [guideText, setGuideText] = useState(""); //영상 위 문자
     const [startTime, setStartTime] = useState(null); // 시작시간 
-    const [badTime, setBadTime] = useState(null); // 찍기 및 빠른 클릭 차단
+    const [badtime, setBadTime] = useState(null); // 찍기 및 빠른 클릭 차단
     const [type, setType] = useState(null); // 영상 타입
+    const [ranges, setRanges] = useState([]);
+    const [duration, setDuration] = useState(0);
 
     const [userId, setUserId] = useState("a");       // 💡 테스트용 임의 ID 저장 변수 추가
 
@@ -29,11 +31,13 @@ export default function HomePage() {
     //fk로 별도로 만들면 captcha 시도횟수, 시도한 영상 제목이나 유형을 넣을 컬럼이 필요할것같아요.(같은 captcha시도 방지)
 
     const openVideoCaptcha = async () => {
+        reset();
         setCaptchaopen(true);
     };
 
     //영상 캡차 불러오기
     const startCaptcha = async (userId) => {
+        reset();
         if (!userId) return;
 
         const res = await fetch(`${API}/mvcaptcha`);
@@ -56,6 +60,7 @@ export default function HomePage() {
         setOptions(data.options);   // ★ 중요
         setBadTime(data.badtime);
         setType(data.type);
+        setRanges(data.options);
         setStarted(true);
     };
 
@@ -94,7 +99,8 @@ export default function HomePage() {
                 captchaId,
                 answer,
                 userId: userId,
-                clickTime: t
+                clickTime: t,
+                type
             })
         });
 
@@ -156,7 +162,7 @@ export default function HomePage() {
                 setRemainTime(Math.ceil(remainSeconds));
             }
             // 0초에 도달했을 때
-            if (remain <= 0 || remain < setBadTime) {
+            if (remain <= 0 || remain < badtime) {
                 clearInterval(timer);
                 setEndedTime(null); // 0초가 되어 종료될 때도 확실하게 비워줌
 
@@ -192,6 +198,11 @@ export default function HomePage() {
         setGuideText("");
         setStartTime(null);
         setProgress(0);
+        setBadTime(Infinity);
+        setEndedTime(null);
+        setRemainTime(0);
+        setEnded(false);
+        setResult(null);
 
     };
     return (
@@ -258,6 +269,9 @@ export default function HomePage() {
                                                 ref={videoRef}
                                                 muted
                                                 playsInline
+                                                onLoadedMetadata={(e) => {
+                                                    setDuration(e.target.duration);
+                                                }}
                                                 onEnded={() => {
                                                     setEnded(true);
                                                     setEndedTime(Date.now());
@@ -273,31 +287,89 @@ export default function HomePage() {
                                                         </div>
                                                     </div>
                                                     <div className="absolute bottom-4 left-0 right-0 z-30 flex justify-center">
-                                                        <div className="grid grid-cols-4 gap-5 w-[80%]">
+                                                        {/* 전체 컨트롤 영역 */}
+                                                        <div className="w-[80%] mx-auto">
+
+                                                            {/* progress bar (A만) */}
                                                             {type === "A" && (
-                                                                <div className="absolute bottom-20 left-0 right-0 px-6">
-                                                                    <div className="relative w-full h-2 bg-zinc-700 rounded overflow-hidden">
-                                                                        <div className="absolute inset-0 flex">
-                                                                            {[...Array(4)].map((_, i) => (
-                                                                                <div key={i} className="flex-1 border-r-2 border-zinc-300/70" />
-                                                                            ))}
-                                                                        </div>
-                                                                        <div
-                                                                            className="h-1 bg-white rounded"
-                                                                            style={{ width: `${progress}%` }}
-                                                                        />
+                                                                <div className="relative w-full h-2 bg-zinc-700 rounded overflow-visible mb-6">
+
+                                                                    {/* 초록 구간 + 숫자 */}
+                                                                    {duration > 0 &&
+                                                                        ranges.map((time, idx) => {
+                                                                            const left = ((time - 0.2) / duration) * 100;
+
+                                                                            return (
+                                                                                <div key={`range-${time}-${idx}`}>
+
+                                                                                    {/* 초록 구간 */}
+                                                                                    <div
+                                                                                        className="absolute top-0 h-2 bg-green-500/50 z-10"
+                                                                                        style={{
+                                                                                            left: `${left}%`,
+                                                                                            width: `${(0.7 / duration) * 100}%`,
+                                                                                        }}
+                                                                                    />
+
+                                                                                    {/* 숫자 */}
+                                                                                    <div
+                                                                                        className="absolute top-[-20px] text-xs text-white z-30"
+                                                                                        style={{
+                                                                                            left: `${left + 2.5}%`,
+                                                                                            transform: "translateX(-50%)",
+                                                                                        }}
+                                                                                    >
+                                                                                        {idx + 1}
+                                                                                    </div>
+                                                                                </div>
+                                                                            );
+                                                                        })}
+
+                                                                    {/* 구간 선 */}
+                                                                    <div className="absolute inset-0 flex z-20">
+                                                                        {[...Array(4)].map((_, i) => (
+                                                                            <div key={`slot-${i}`} className="flex-1 border-r border-zinc-300/70" />
+                                                                        ))}
                                                                     </div>
+
+                                                                    {/* 진행바 */}
+                                                                    <div
+                                                                        className="h-full bg-white relative z-30"
+                                                                        style={{ width: `${progress}%` }}
+                                                                    />
                                                                 </div>
                                                             )}
-                                                            {options.map((item) => (
-                                                                <button
-                                                                    key={item}
-                                                                    onClick={() => handleAnswer(item)}
-                                                                    className="bg-zinc-800/70 backdrop-blur-sm p-2 rounded text-xl"
-                                                                >
-                                                                    {item}
-                                                                </button>
-                                                            ))}
+
+                                                            {/* 버튼 영역 */}
+                                                            <div className="grid grid-cols-4 gap-5">
+
+                                                                {/* A 타입 → 1~4 */}
+                                                                {type === "A" &&
+                                                                    [1, 2, 3, 4].map((num) => (
+                                                                        <button
+                                                                            key={`a-${num}`}
+                                                                            onClick={() => handleAnswer(num - 1)}
+                                                                            className="bg-zinc-800/70 backdrop-blur-sm p-2 rounded text-xl"
+                                                                        >
+                                                                            {num}
+                                                                        </button>
+                                                                    ))
+                                                                }
+
+                                                                {/* A 제외 → options */}
+                                                                {type !== "A" &&
+                                                                    options.map((item, idx) => (
+                                                                        <button
+                                                                            key={`option-${item}-${idx}`}
+                                                                            onClick={() => handleAnswer(item)}
+                                                                            className="bg-zinc-800/70 backdrop-blur-sm p-2 rounded text-xl"
+                                                                        >
+                                                                            {item}
+                                                                        </button>
+                                                                    ))
+                                                                }
+
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </>

@@ -4,43 +4,8 @@
     "B": "TYPE B: 단기기억형",
     "C": "TYPE C: 추론연상형",
     "D": "TYPE D: 행동탐지형"
-  },
-  "game1": [
-    {
-      "id": "q1",
-      "type": "B",
-      "level": 1,
-      "question": "슬라임이 쓰러지는 순간 클릭하세요",
-      "badtime": 2,
-      "answer": 1,
-      "active": true
-    },
-    {
-      "id": "q2",
-      "type": "B",
-      "level": 1,
-      "question": "기사가 점프하는 순간 클릭하세요",
-      "badtime": 4,
-      "answer": 2,
-      "active": true
-    },
-    {
-      "id": "q3",
-      "type": "B",
-      "level": 1,
-      "question": "박쥐가 쓰러지는 순간 클릭하세요",
-      "badtime": 4,
-      "answer": 3,
-      "active": true
-    },
-    {
-      "id": "q4",
-      "type": "B",
-      "level": 1,
-      "question": "해골이 쓰러지는 순간 클릭하세요",
-      "badtime": 8,
-      "answer": 4,
-      "active": true
-    }
-  ]
+  },"game1":{"type":"A","level":1,"options":[{"question":"슬라임이 쓰러지는 구간을 클릭하세요","badtime":2},{"question":"기사가 점프하는 구간을 클릭하세요","badtime":4},{"question":"해골병사가 나오는 구간을 선택하세요","badtime":5.5},{"question":"해골이 쓰러지는 구간을 클릭하세요","badtime":8}],"active":true}
+  ,"game2":{"type":"A","level":1,"options":[{"question":"식물이 쓰러지는 구간을 클릭하세요","badtime":3},{"question":"거미를 치는 구간을 클릭하세요","badtime":4.5},{"question":"박쥐가 쓰러지는 구간을 클릭하세요","badtime":6},{"question":"골룸을 치는 구간을 클릭하세요","badtime":8}],"active":true}
+  ,"human1":{"type":"A","level":1,"options":[{"question":"초록옷이 보자기를 내는 구간을 클릭하세요","badtime":2.5},{"question":"동시에 가위를 내는 첫번쨰 구간을 클릭하세요","badtime":5.5},{"question":"동시에 가위를 내는 두번쨰 구간을 클릭하세요","badtime":7.5},{"question":"초록색옷이 이긴 포즈를 취하는 구간을 클릭하세요","badtime":8.5}],"active":true}
+
 }
