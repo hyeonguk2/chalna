@@ -12,6 +12,7 @@ export default function Signup() {
   const [verified, setVerified] = useState(false);
   const [code, setCode] = useState("");
   const [timeLeft, setTimeLeft] = useState(0);
+  const [resendTimeLeft, setResendTimeLeft] = useState(0);
   const [sendingCode, setSendingCode] = useState(false);
   const [checkingCode, setCheckingCode] = useState(false);
   const [signingUp, setSigningUp] = useState(false);
@@ -24,6 +25,7 @@ export default function Signup() {
     setVerifiedEmail("");
     setCode("");
     setTimeLeft(0);
+    setResendTimeLeft(0);
   };
 
   const handleEmailChange = (e) => {
@@ -49,6 +51,12 @@ export default function Signup() {
       const data = await res.text();
 
       if (!res.ok) {
+        if (res.status === 429) {
+          const { retryAfter } = JSON.parse(data);
+          setResendTimeLeft(retryAfter);
+          return alert(`${retryAfter}초 후에 다시 요청해 주세요.`);
+        }
+
         if (data === "email config missing") {
           return alert("서버 이메일 설정이 필요합니다.");
         }
@@ -61,6 +69,7 @@ export default function Signup() {
       setVerifiedEmail("");
       setCode("");
       setTimeLeft(180);
+      setResendTimeLeft(30);
       alert("인증번호를 이메일로 보냈습니다.");
     } catch (err) {
       console.error(err);
@@ -117,6 +126,16 @@ export default function Signup() {
 
     return () => clearInterval(timer);
   }, [codeSent, timeLeft]);
+
+  useEffect(() => {
+    if (!codeSent || resendTimeLeft <= 0) return;
+
+    const timer = setInterval(() => {
+      setResendTimeLeft((prev) => Math.max(prev - 1, 0));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [codeSent, resendTimeLeft]);
 
   const formatTime = (sec) => {
     const m = Math.floor(sec / 60);
@@ -203,14 +222,20 @@ export default function Signup() {
         {!verified && (
           <button
             onClick={sendCode}
-            disabled={!email || !isValidEmail(email) || sendingCode}
+            disabled={!email || !isValidEmail(email) || sendingCode || (codeSent && resendTimeLeft > 0)}
             className={`w-full mb-3 py-2 rounded ${
-              email && isValidEmail(email) && !sendingCode
+              email && isValidEmail(email) && !sendingCode && (!codeSent || resendTimeLeft <= 0)
                 ? "bg-blue-600"
                 : "bg-gray-600 cursor-not-allowed"
             }`}
           >
-            {sendingCode ? "전송 중..." : "인증번호 받기"}
+            {sendingCode
+              ? "전송 중..."
+              : codeSent
+                ? resendTimeLeft > 0
+                  ? `인증번호 재전송 (${formatTime(resendTimeLeft)})`
+                  : "인증번호 재전송"
+                : "인증번호 받기"}
           </button>
         )}
 
