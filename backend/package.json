@@ -12,11 +12,13 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "canvas": "^3.2.3",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "mysql": "^2.18.1",
     "mysql2": "^3.22.4",
-    "nodemailer": "^8.0.9"
+    "nodemailer": "^8.0.9",
+    "uuid": "^14.0.0"
   }
 }
