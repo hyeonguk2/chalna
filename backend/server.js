@@ -2,6 +2,7 @@ const express = require("express");
 const mysql = require("mysql2");
 const cors = require("cors");
 const nodemailer = require("nodemailer");
+const path = require("path");
 require("dotenv").config();
 
 const app = express();
@@ -56,14 +57,16 @@ db.connect((err) => {
 
     console.log("mysql connected");
 
+    // 테이블 자동 생성 (login_attempts 추가)
     const createTable = `
-        CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            userid VARCHAR(50) UNIQUE,
-            email VARCHAR(100) UNIQUE,
-            password VARCHAR(255)
-        )
-    `;
+    CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        userid VARCHAR(50) UNIQUE,
+        email VARCHAR(100) UNIQUE,
+        password VARCHAR(255),
+        login_attempts INT DEFAULT 0
+    )
+`;
 
     db.query(createTable, (err) => {
         if (err) {
@@ -235,6 +238,20 @@ app.post("/signup", async (req, res) => {
     }
 });
 
+app.use(express.json());
+// 라우터 연결
+
+app.use(
+    "/videos",
+    express.static(path.join(__dirname, "public/videos"))
+);
+
+app.use("/mvcaptcha", require("./routes/mvcaptcha"));
+
+const cleanupCaptcha = require("./routes/cleanupCaptcha");
+cleanupCaptcha(db);
+
+// 서버 시작
 const port = process.env.PORT || 3001;
 
 app.listen(port, () => {
