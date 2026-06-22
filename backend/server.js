@@ -77,6 +77,7 @@ app.use(
 );
 
 app.use("/mvcaptcha", require("./routes/mvcaptcha"));
+app.use("/mousebehavior", require("./routes/mousebehavior")(db));
 
 const cleanupCaptcha = require("./routes/cleanupCaptcha");
 cleanupCaptcha(db);
