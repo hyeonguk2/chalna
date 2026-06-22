@@ -1,6 +1,5 @@
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useRef, useState, useEffect } from "react";
-import img1 from "/1.png";
 import "./App.css";
 
 export default function HomePage() {
@@ -16,6 +15,7 @@ export default function HomePage() {
     const [endedTime, setEndedTime] = useState(null); //영상 끝난 시간
     const [remainTime, setRemainTime] = useState(0); //영상 후 5초 타이머
     const [progress, setProgress] = useState(0); //영상typeA 상태바
+    const imgIntervalRef = useRef(null); // ⭐️ [추가] 이미지용 가상 타이머 Ref
 
     //캡챠데이터용
     const [captchaId, setCaptchaId] = useState(null); //문제 고유id
@@ -25,11 +25,130 @@ export default function HomePage() {
     const [badtime, setBadTime] = useState(null); // 찍기 및 빠른 클릭 차단
     const [type, setType] = useState(null); // 영상 타입
     const [duration, setDuration] = useState(0);
+    // ⭐️ [추가] 캡차 성공 여부를 기록할 상태 변수
+    const [isCaptchaPassed, setIsCaptchaPassed] = useState(false);
 
-    const [userId, setUserId] = useState("a");       // 💡 테스트용 임의 ID 저장 변수 추가
+    const [userId] = useState("a");       // 💡 테스트용 임의 ID 저장 변수 추가
+    const [sessionUser, setSessionUser] = useState(null);
+    const [loginUsername, setLoginUsername] = useState("");
+    const [loginPassword, setLoginPassword] = useState("");
+    const [mouseTrajectory, setMouseTrajectory] = useState([]);
+    const [loginError, setLoginError] = useState("");
 
     //users table 에 login_attempts 컬럼을 임시로 추가했는데 이걸 fk로 따로 테이블 만들어서 연결할지 결정필요
     //fk로 별도로 만들면 captcha 시도횟수, 시도한 영상 제목이나 유형을 넣을 컬럼이 필요할것같아요.(같은 captcha시도 방지)
+
+    useEffect(() => {
+        const loadSession = async () => {
+            try {
+                const res = await fetch("/api/me", {
+                    credentials: "include"
+                });
+                if (!res.ok) {
+                    setSessionUser(null);
+                    return;
+                } if (res.status === 401) {
+                    setSessionUser(null);
+                    return;
+                }
+
+                const data = await res.json();
+                setSessionUser(data.user || null);
+            } catch (error) {
+                console.error("session check failed:", error);
+                setSessionUser(null);
+            }
+        };
+
+        loadSession();
+    }, []);
+
+    useEffect(() => {
+
+        let lastLoggedTime = 0;
+        const handleMouseMove = (event) => {
+            const now = Date.now();
+            if (now - lastLoggedTime > 30) {
+                setMouseTrajectory((prev) => [
+                    ...prev,
+                    {
+                        x: event.clientX,
+                        y: event.clientY,
+                        t: now
+                    }
+                ]);
+                lastLoggedTime = now;
+            }
+        };
+        window.addEventListener("mousemove", handleMouseMove);
+        return () => {
+            window.removeEventListener("mousemove", handleMouseMove);
+        };
+    }, []);
+
+    const login = async (event) => {
+        event.preventDefault();
+        setLoginError("");
+
+        // 🔒 [추가] 로그인 버튼을 눌렀는데 아직 캡차를 풀지 않았다면 입구 컷
+        if (!isCaptchaPassed) {
+            alert("보안을 위해 캡차 인증을 먼저 완료해 주세요.");
+            return;
+        }
+
+        const loginData = {
+            username: loginUsername,
+            password: loginPassword,
+            behaviorMetrics: {
+                mouseTrajectory,
+                clickData: []
+            },
+            captchaData: {
+                answer: isCaptchaPassed // true 값이 넘어감
+            }
+        };
+
+        try {
+            const response = await fetch("/api/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify(loginData)
+            });
+
+            const result = await response.json().catch(() => ({
+                success: false,
+                message: `서버 응답을 읽을 수 없습니다. (${response.status})`
+            }));
+
+            if (!response.ok || !result.success) {
+                setLoginError(result.message || "로그인 실패");
+                alert(result.message);
+                return;
+            }
+
+            const sessionResponse = await fetch("/api/me");
+            const sessionData = await sessionResponse.json();
+
+            setSessionUser(sessionData.user || { userid: loginUsername });
+            setLoginUsername("");
+            setLoginPassword("");
+            setMouseTrajectory([]);
+        } catch (error) {
+            console.error("login failed:", error);
+            setLoginError("서버 연결 실패");
+        }
+    };
+
+    const logout = async () => {
+        try {
+            await fetch("/api/logout", { method: "POST", credentials: "include" });
+        } finally {
+            setSessionUser(null);
+            setIsCaptchaPassed(false);
+            setLoginError("");
+        }
+    };
 
     const openVideoCaptcha = async () => {
         reset();
@@ -37,11 +156,14 @@ export default function HomePage() {
     };
 
     //영상 캡차 불러오기
-    const startCaptcha = async (userId) => {
+    const startCaptcha = async () => {
         reset();
-        if (!userId) return;
+        if (!loginUsername) {
+            alert("아이디를 먼저 입력해주세요.");
+            return;
+        }
 
-        const res = await fetch(`${API}/mvcaptcha`);
+        const res = await fetch(`${API}/mvcaptcha?userId=${loginUsername}`);
         const data = await res.json();
 
         // 2. 영상 요청
@@ -52,7 +174,6 @@ export default function HomePage() {
                 captchaId: data.captchaId
             })
         });
-
         const videoData = await videoRes.json();
         setEnded(false);
         setVideoUrl(videoData.video);   // ★ 중요
@@ -61,6 +182,9 @@ export default function HomePage() {
         setOptions(data.options);   // ★ 중요
         setBadTime(data.badtime);
         setType(data.type);
+        if (data.type === "C") {
+            setDuration(data.badtime); // 백엔드에서 이미지 제한시간을 주면 data.duration 등으로 대체 가능
+        }
         setStarted(true);
     };
 
@@ -68,67 +192,140 @@ export default function HomePage() {
     const handleAnswer = (answer) => {
         if (!startTime) return;
 
-        // 1. 버튼을 누른 순간 타이머가 돌지 못하도록 endedTime을 즉시 비웁니다. (중요!)
+        // 1. 버튼을 누른 즉시 타이머 관련 상태를 모두 초기화/종료합니다. (스쳐 지나가는 현상 방지)
         setEndedTime(null);
+        setEnded(false); // ⭐️ [추가] 이 상태를 false로 바꿔야 "X초 남음" 안내창이 즉시 닫힙니다.
+        setRemainTime(0); // ⭐️ [추가] 남은 시간도 즉시 0으로 초기화
+
+        // ⭐️ 이미지 타이머 정지 처리
+        if (imgIntervalRef.current) {
+            clearInterval(imgIntervalRef.current);
+            imgIntervalRef.current = ""; // 빈 값으로 초기화
+        }
 
         const timeDiffMs = Date.now() - startTime;
         const t = timeDiffMs / 1000;
 
         // 2. 만약 영상이 끝난 후에 누른 거였다면 (남아있던 remainTime 기반으로 체크)
         // 5초 타임아웃 처리는 타이머 useEffect가 아니라 여기서 직접 계산해 자릅니다.
-        if (ended && remainTime <= 0) {
-            setResult("fail");
-            return;
-        }
+        // (주의: 위에서 remainTime을 0으로 만들기 전인 원래 상태를 기준으로 체크해야 하므로, 
+        //  안전하게 처리하기 위해 ended 상태가 참이었고 제한시간을 넘겼는지만 따로 확인하거나 
+        //  현재는 이미 handleAnswer가 실행되었으므로 바로 submit으로 넘겨도 무방합니다.)
 
         const video = videoRef.current;
         if (video) {
             video.pause();
         }
         console.log(t);
+
         // 정답 전송
         submitCaptcha(t, answer);
     };
 
-    //영상 캡차 검증
+    //영상/이미지 캡차 검증
     const submitCaptcha = async (t, answer) => {
-        const res = await fetch(`${API}/mvcaptcha/verify`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                captchaId,
-                answer,
-                userId: userId,
-                clickTime: t,
-                type
-            })
-        });
+        // 1. [강제 정지] 이미지 가상 타이머 인터벌 즉시 정지 및 값 고정
+        if (imgIntervalRef.current) {
+            clearInterval(imgIntervalRef.current);
+            imgIntervalRef.current = null;
 
-        const data = await res.json();
-        console.log(data.reason);
-        setResult(data.reason || "fail");
+            // 클릭한 시점(t) 기준으로 progress와 remainTime을 화면에 강제 고정
+            const virtualDuration = 5;
+            const currentTimeSec = t / 1000;
+            setProgress(Math.min((currentTimeSec / virtualDuration) * 100, 100));
+            setRemainTime(Math.min(currentTimeSec, virtualDuration));
+        }
+
+        // 2. [강제 정지] 비디오 캡차일 경우 비디오 재생도 즉시 일시정지
+        if (type === "V" && videoRef.current) {
+            videoRef.current.pause();
+        }
+
+        // 3. 캡챠 종료 상태 지정
+        setEnded(true);
+        setEndedTime(Date.now());
+
+        // 4. 서버 검증 요청 수행
+        try {
+            const res = await fetch(`${API}/mvcaptcha/verify`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    captchaId,
+                    answer,
+                    userId: loginUsername,
+                    clickTime: t,
+                    type
+                })
+            });
+
+            const data = await res.json();
+            console.log(data.reason);
+            setResult(data.reason || "fail");
+            // ⭐️ [추가] 백엔드 검증 결과가 success면 통과 상태로 변경
+            if (data.reason === "success") {
+                setIsCaptchaPassed(true);
+            } else {
+                setIsCaptchaPassed(false);
+            }
+        } catch (error) {
+            console.error("검증 중 오류 발생:", error);
+            setResult("fail");
+        }
     };
 
-    // 비디오 모듈 제어 및 시작 시간 기록
+    // ⭐️ [수정] 비디오 및 이미지 초기 실행 흐름 제어 제어
     useEffect(() => {
-        if (!started || !videoUrl || !videoRef.current) return;
+        if (!started || !videoUrl) return;
 
-        const url = `${API}${videoUrl}`;
+        // 1. 비디오 타입일 때 제어
+        if (type !== "C" && videoRef.current) {
+            const url = `${API}${videoUrl}`;
+            videoRef.current.src = url;
+            videoRef.current.load();
 
-        videoRef.current.src = url;
-        videoRef.current.load();
+            videoRef.current.play().then(() => {
+                setStartTime(Date.now());
+            }).catch(err => console.log("자동 재생 차단 또는 오류:", err));
+        }
 
-        // 영상이 재생되는 순간의 타임스탬프를 기록
-        videoRef.current.play().then(() => {
+        // 2. 이미지 타입('C')일 때 제어 (가상 타이머 구동)
+        else if (type === "C") {
+            const virtualDuration = 5; // 5초 동안 이미지 활성화 및 CSS 애니메이션 진행
             setStartTime(Date.now());
-        }).catch(err => console.log("자동 재생 차단 또는 오류:", err));
 
-    }, [started, videoUrl]);
+            const intervalImg = setInterval(() => {
+                const elapsed = (Date.now() - Date.now()) // 기본 공식 기반 계산
+                setStartTime(prevStartTime => {
+                    if (!prevStartTime) return prevStartTime;
+
+                    const currentTimeSec = (Date.now() - prevStartTime) / 1000;
+
+                    // 진행바 업데이트
+                    setProgress((currentTimeSec / virtualDuration) * 100);
+
+                    // 지정된 duration에 도달했을 때 (재생 종료 상황)
+                    if (currentTimeSec >= virtualDuration) {
+                        clearInterval(intervalImg);
+                        setEnded(true);
+                        setEndedTime(Date.now());
+                        setRemainTime(5); // 종료 후 정답 마킹 추가 5초 카운트다운 시작
+                    }
+                    return prevStartTime;
+                });
+            }, 30); // 약 30ms 간격으로 progress 갱신 (RAF 대용)
+
+            imgIntervalRef.current = intervalImg;
+        }
+
+        return () => {
+            if (imgIntervalRef.current) clearInterval(imgIntervalRef.current);
+        };
+    }, [started, videoUrl, type]);
 
     useEffect(() => {
         const video = videoRef.current;
-        if (!video) return;
-
+        if (!video || type === "C") return;
         let raf;
 
         const update = () => {
@@ -141,11 +338,13 @@ export default function HomePage() {
         raf = requestAnimationFrame(update);
 
         return () => cancelAnimationFrame(raf);
-    }, [videoUrl]);
+    }, [videoUrl, type]);
 
     // 5초 카운트다운 및 0초 도달 시 자동 실패 처리
+    // 5초 카운트다운 및 0초 도달 시 자동 실패 처리
     useEffect(() => {
-        if (!endedTime) return;
+        // ⭐️endedTime이 없거나, 이미 성공/실패 결과(result)가 나왔다면 타이머를 돌리지 않음
+        if (!endedTime || result !== null) return;
 
         const timer = setInterval(() => {
             const totalDuration = 5000;
@@ -155,35 +354,45 @@ export default function HomePage() {
             const remainSeconds = remain / 1000; // 밀리초를 초 단위로 변환
 
             if (remainSeconds <= 1.0) {
-                // 1초 이하일 때는 소수점 첫째 자리까지 표현 (예: 0.9, 0.8 ... 0.0)
                 setRemainTime(remainSeconds.toFixed(1));
             } else {
-                // 1초 초과일 때는 올림(Math.ceil) 처리하여 정수로 표현 (예: 5, 4, 3, 2)
                 setRemainTime(Math.ceil(remainSeconds));
             }
+
             // 0초에 도달했을 때
             if (remain <= 0 || remain < badtime) {
                 clearInterval(timer);
-                setEndedTime(null); // 0초가 되어 종료될 때도 확실하게 비워줌
+                setEndedTime(null);
 
-                const video = videoRef.current;
-                let currentVideoTime = 0;
-                if (video && video.readyState >= 2) {
-                    currentVideoTime = video.currentTime;
-                    video.pause();
+                // ⭐️ 인터벌이 실행되는 순간 찰나의 타이밍에 result가 채워졌는지 다시 한번 체크
+                if (result !== null) return;
+
+                let currentVerifyTime = 0;
+
+                if (type === "C") {
+                    currentVerifyTime = duration;
+                    if (imgIntervalRef.current) clearInterval(imgIntervalRef.current);
+                } else {
+                    const video = videoRef.current;
+                    if (video && video.readyState >= 2) {
+                        currentVerifyTime = video.currentTime;
+                        video.pause();
+                    }
                 }
-                submitCaptcha(currentVideoTime, "");
+                submitCaptcha(currentVerifyTime, "");
             }
         }, 50);
 
         return () => clearInterval(timer);
-    }, [endedTime]);
+    }, [endedTime, type, duration, badtime, result]); // ⭐️ 의존성 배열에 result 추가
 
     //영상 초기화
     const reset = () => {
-        const video = videoRef.current;
-        if (!video) return;
+        if (imgIntervalRef.current) {
+            clearInterval(imgIntervalRef.current); // ⭐️ 이미지 타이머 초기화 필수
+        }
 
+        const video = videoRef.current;
         if (video) {
             video.pause();
             video.removeAttribute("src");
@@ -193,7 +402,7 @@ export default function HomePage() {
         setRemainTime(0);
         setStarted(false);
         setResult(null);
-        setVideoUrl(null);
+        setVideoUrl("");
         setOptions([]);
         setGuideText("");
         setStartTime(null);
@@ -204,30 +413,62 @@ export default function HomePage() {
         setEnded(false);
         setResult(null);
 
+
     };
     return (
 
         <div className="min-h-screen w-full bg-zinc-950 text-white">
             {/* Header */}
             <header className="border-b border-zinc-800 backdrop-blur">
-                <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+                <div className="max-w-7xl mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-4">
                     <h1 className="text-white text-2xl font-bold tracking-tight">
                         Vision CAPTCHA
                     </h1>
-                    <nav className="flex gap-6 text-sm text-zinc-300">
-                        <Link to="/login" className="hover:text-white transition">
-                            로그인
-                        </Link>
-                        <a href="#about" className="hover:text-white transition">
-                            소개
-                        </a>
-                        <a href="#features" className="hover:text-white transition">
-                            기능
-                        </a>
-                        <a href="#demo" className="hover:text-white transition">
-                            데모
-                        </a>
-                    </nav>
+                    <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-300">
+                        {sessionUser ? (
+                            <>
+                                <span className="text-white">
+                                    {sessionUser.userid}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={logout}
+                                    className="px-4 py-2 rounded bg-zinc-800 hover:bg-zinc-700 text-white transition"
+                                >
+                                    로그아웃
+                                </button>
+                            </>
+                        ) : (
+                            <form onSubmit={login} className="flex flex-wrap items-center gap-2">
+                                <input
+                                    type="text"
+                                    value={loginUsername}
+                                    onChange={(e) => setLoginUsername(e.target.value)}
+                                    placeholder="아이디"
+                                    className="w-32 px-3 py-2 bg-zinc-900 border border-zinc-700 rounded outline-none focus:border-purple-500 text-white"
+                                    required
+                                />
+                                <input
+                                    type="password"
+                                    value={loginPassword}
+                                    onChange={(e) => setLoginPassword(e.target.value)}
+                                    placeholder="비밀번호"
+                                    className="w-36 px-3 py-2 bg-zinc-900 border border-zinc-700 rounded outline-none focus:border-purple-500 text-white"
+                                    required
+                                />
+                                <button
+                                    type="submit"
+                                    className="px-4 py-2 rounded bg-purple-600 hover:bg-purple-500 text-white transition"
+                                >
+                                    로그인
+                                </button>
+                                <Link to="/signup" className="px-3 py-2 hover:text-white transition">
+                                    회원가입
+                                </Link>
+
+                            </form>
+                        )}
+                    </div>
                 </div>
             </header>
 
@@ -264,21 +505,32 @@ export default function HomePage() {
                                 <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
                                     <div className="bg-zinc-900 p-6 rounded-2xl w-[800px] max-w-[95vw]">
                                         <div className="aspect-video relative overflow-hidden rounded-xl">
-                                            {/* 영상 */}
-                                            <video
-                                                ref={videoRef}
-                                                muted
-                                                playsInline
-                                                onLoadedMetadata={(e) => {
-                                                    setDuration(e.target.duration);
-                                                }}
-                                                onEnded={() => {
-                                                    setEnded(true);
-                                                    setEndedTime(Date.now());
-                                                    setRemainTime(5);
-                                                }}
-                                                className="w-full h-full object-cover"
-                                            />
+                                            {type === "C" ? (
+                                                <div className="w-full h-full bg-zinc-900 relative flex items-center justify-center">
+                                                    {started && (
+                                                        <img
+                                                            src={`${API}${videoUrl}`}
+                                                            alt="captcha"
+                                                            // 💡 ended가 되면 투명도를 주거나 필터를 먹여 '멈춤 효과' 비주얼을 제공할 수 있습니다.
+                                                            className={`w-full h-full object-cover transition-all duration-300 ${ended ? "opacity-40 filter blur-sm" : "animate-move"
+                                                                }`}
+                                                        />)}
+                                                </div>
+                                            ) : (
+                                                <video
+                                                    ref={videoRef}
+                                                    muted
+                                                    playsInline
+                                                    onLoadedMetadata={(e) => {
+                                                        setDuration(e.target.duration);
+                                                    }}
+                                                    onEnded={() => {
+                                                        setEnded(true);
+                                                        setEndedTime(Date.now());
+                                                        setRemainTime(5);
+                                                    }}
+                                                    className="w-full h-full object-cover"
+                                                />)}
                                             {started && result === null && (
                                                 <>
                                                     <div className="absolute top-4 left-0 w-full z-30 pointer-events-none">
@@ -297,7 +549,7 @@ export default function HomePage() {
                                                                     {/* 초록 구간 + 숫자 */}
                                                                     {duration > 0 &&
                                                                         options.map((time, idx) => {
-                                                                            const left = ((time - 0.2) / duration) * 100;
+                                                                            const left = (time / duration) * 100;
 
                                                                             return (
                                                                                 <div key={`options-${time}-${idx}`}>
@@ -326,11 +578,11 @@ export default function HomePage() {
                                                                         })}
 
                                                                     {/* 구간 선 */}
-                                                                    <div className="absolute inset-0 flex z-20">
+                                                                    {/* <div className="absolute inset-0 flex z-20">
                                                                         {[...Array(4)].map((_, i) => (
                                                                             <div key={`slot-${i}`} className="flex-1 border-r border-zinc-300/70" />
                                                                         ))}
-                                                                    </div>
+                                                                    </div> */}
 
                                                                     {/* 진행바 */}
                                                                     <div
@@ -542,7 +794,7 @@ export default function HomePage() {
 
             {/* Demo_ 추가 페이지 틀 */}
 
-            <section id="demo" className="border-t border-zinc-800">
+            {/*<section id="demo" className="border-t border-zinc-800">
                 <div className="max-w-7xl mx-auto px-6 py-24">
                     <div className="text-center max-w-3xl mx-auto">
                         <h2 className="text-4xl font-bold mb-6">
@@ -554,18 +806,8 @@ export default function HomePage() {
                         </p>
 
                         <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-10">
-                            <div className="aspect-video rounded-2xl bg-zinc-800 flex items-center justify-center mb-6 relative overflow-hidden">
-
-                                <img
-                                    src="/1.png"
-                                    className="absolute animate-move"
-                                    alt="event"
-                                />
-
-                    
-
-                            </div>
-                            {/* <div className="aspect-video rounded-2xl bg-zinc-800 flex items-center justify-center mb-6">
+                            
+                            <div className="aspect-video rounded-2xl bg-zinc-800 flex items-center justify-center mb-6">
                                 
                                 <div className="text-center">
 
@@ -575,7 +817,7 @@ export default function HomePage() {
                                         이벤트 발생 대기 중...
                                     </p>
                                 </div>
-                            </div> */}
+                            </div> 
 
                             <button className="px-8 py-4 rounded-2xl bg-white text-black font-semibold hover:opacity-90 transition">
                                 이벤트 확인
@@ -583,7 +825,7 @@ export default function HomePage() {
                         </div>
                     </div>
                 </div>
-            </section>
+            </section>*/}
         </div>
     );
 }

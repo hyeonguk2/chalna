@@ -7,7 +7,6 @@ const fs = require("fs");
 const router = express.Router();
 const store = {};
 
-
 // =========================
 // DB 연결
 // =========================
@@ -35,6 +34,7 @@ db.connect((err) => {
             answer VARCHAR(10),
             badtime DECIMAL(3,1),
             video VARCHAR(100),
+            level INT,
             captchatype CHAR(1),
             created_at BIGINT
         )
@@ -69,52 +69,87 @@ function shuffle(array) {
 }
 
 // =========================
-// 캡차 생성
+// 캡차 생성 (오류 해결 버전)
 // =========================
-router.get("/", (req, res) => {
-
+router.get("/", async (req, res) => {
+    const { userId } = req.query;
     const id = uuidv4();
 
-    // 🎬 영상 폴더
-    const captchaTypeDir = path.join(
-        __dirname,
-        "..",
-        "public",
-        "videos",
-        "captchatype"
-    );
+    // 🎬 영상 폴더 세팅
+    const captchaTypeDir = path.join(__dirname, "..", "public", "videos", "captchatype");
 
-    const captchaTypes = fs.readdirSync(captchaTypeDir)
-        .filter(file =>
-            fs.statSync(path.join(captchaTypeDir, file)).isDirectory()
-        );
+    let captchaTypes = fs.readdirSync(captchaTypeDir)
+        .filter(file => fs.statSync(path.join(captchaTypeDir, file)).isDirectory());
 
-    const randomCaptchaType =
-        captchaTypes[Math.floor(Math.random() * captchaTypes.length)];
+    // 💡 변수 스코프 에러 방지를 위해 확실하게 let으로 최상단 선언
+    let isUserTargetLevel2 = false;
 
-    const captchaType =
-        randomCaptchaType.replace("captchatype_", "");
+    // 1. 해당 유저가 직전에 실패한 타입 조회 & 현재 대상 레벨 상태 판별
+    if (userId) {
+        try {
+            const userData = await new Promise((resolve) => {
+                db.query("SELECT captchatype, login_attempts FROM users WHERE userid = ?", [userId], (err, rows) => {
+                    if (err || rows.length === 0) resolve(null);
+                    else resolve(rows[0]);
+                });
+            });
 
-    // meta 읽기
-    const meta = JSON.parse(
-        fs.readFileSync(path.join(captchaTypeDir, randomCaptchaType, "meta.json"), "utf-8")
-    );
-
-    // active 필터
-    const videos = Object.keys(meta)
-        .filter(key => meta[key]?.active === true);
-
-    if (videos.length === 0) {
-        return res.status(404).send("no video folders");
+            if (userData) {
+                // 직전 실패 타입 제외
+                if (userData.captchatype) {
+                    const filteredTypes = captchaTypes.filter(file => !file.endsWith(`_${userData.captchatype}`));
+                    if (filteredTypes.length > 0) captchaTypes = filteredTypes;
+                }
+                // login_attempts가 -222이면 레벨 2 진입 대상 유저임
+                if (userData.login_attempts === -222) {
+                    isUserTargetLevel2 = true;
+                }
+            }
+        } catch (dbErr) {
+            console.error("유저 상태 조회 실패:", dbErr);
+        }
     }
 
-    const randomVideo =
-        videos[Math.floor(Math.random() * videos.length)];
+    const randomCaptchaType = captchaTypes[Math.floor(Math.random() * captchaTypes.length)];
+    const captchaType = randomCaptchaType.replace("captchatype_", "");
+
+    const metaPath = path.join(captchaTypeDir, randomCaptchaType, "meta.json");
+    if (!fs.existsSync(metaPath)) {
+        return res.status(404).send("meta.json not found");
+    }
+    const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+
+    // ==========================================================
+    // 2. 유저 조건에 맞게 비디오(문제) 필터링 (ReferenceError 해결 구간)
+    // ==========================================================
+    const videos = Object.keys(meta).filter(key => {
+        const isActive = meta[key]?.active === true;
+        const videoLevel = Number(meta[key]?.level || 1);
+
+        if (isUserTargetLevel2) {
+            return isActive && videoLevel === 2; // 레벨 2 문제만 출제
+        } else {
+            return isActive && videoLevel !== 2; // 레벨 1 문제 출제
+        }
+    });
+
+    // 만약 레벨 2에 맞는 특화 문제가 폴더에 없을 경우를 대비한 롤백 방어 코드
+    let finalVideos = videos;
+    if (finalVideos.length === 0) {
+        finalVideos = Object.keys(meta).filter(key => meta[key]?.active === true);
+    }
+
+    if (finalVideos.length === 0) {
+        return res.status(404).send("no available video folders");
+    }
+
+    const randomVideo = finalVideos[Math.floor(Math.random() * finalVideos.length)];
 
     let answer;
     let question;
     let badtime;
     let choices;
+    let level = Number(meta[randomVideo]?.level || 1);
 
     if (captchaType === "A") {
         const options = meta[randomVideo].options;
@@ -122,37 +157,35 @@ router.get("/", (req, res) => {
         question = options[answer].question;
         badtime = options[answer].badtime;
         choices = options.map(option => option.badtime);
-    }
-    else {
+    } else {
         answer = meta[randomVideo].answer;
         question = meta[randomVideo].question;
         badtime = meta[randomVideo].badtime;
-        choices = [
-            answer,
-            ...meta[randomVideo].options
-        ];
+        choices = [answer, ...meta[randomVideo].options];
         shuffle(choices);
     }
 
     const createdAt = Date.now();
 
     db.query(
-        "INSERT INTO captcha (captchaid, answer, badtime, video, captchatype, created_at) VALUES (?, ?,?, ?,?, ?)",
-        [id, answer, badtime, randomVideo, captchaType, createdAt]
+        "INSERT INTO captcha (captchaid, answer, badtime, video, level, captchatype, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [id, answer, badtime, randomVideo, level, captchaType, createdAt],
+        (insErr) => {
+            if (insErr) console.error("캡차 데이터 삽입 실패:", insErr);
+        }
     );
 
     res.json({
         captchaId: id,
         question,
         options: choices,
-        type: captchaType
+        type: captchaType,
+        currentLevel: isUserTargetLevel2 ? 2 : 1
     });
 });
 
 router.post("/video", (req, res) => {
-
     const { captchaId } = req.body;
-
     db.query(
         "SELECT * FROM captcha WHERE captchaid = ?",
         [captchaId],
@@ -163,9 +196,13 @@ router.post("/video", (req, res) => {
             }
 
             const data = rows[0];
+            let videoUrl = "";
 
-            const videoUrl = `/videos/captchatype/captchatype_${data.captchatype}/video/${data.video}.mp4`;
-
+            if (data.captchatype === "C") {
+                videoUrl = `/videos/captchatype/captchatype_${data.captchatype}/img/${data.video}.png`;
+            } else {
+                videoUrl = `/videos/captchatype/captchatype_${data.captchatype}/video/${data.video}.mp4`;
+            }
             res.json({
                 video: videoUrl
             });
@@ -178,7 +215,7 @@ router.post("/video", (req, res) => {
 // =========================
 router.post("/verify", (req, res) => {
     // 1. 프론트엔드에서 전송한 userid(로그인 ID)를 추가로 받습니다.
-    const { captchaId, answer, userId, clickTime,type } = req.body;
+    const { captchaId, answer, userId, clickTime, type } = req.body;
 
     // 만약 로그인 시도가 아니라 비로그인 상태(예: ID 입력 전)에서 호출되었다면 방어 코드
     if (!userId) {
@@ -206,51 +243,98 @@ router.post("/verify", (req, res) => {
             const data = rows[0];
             const badtimeNum = Number(data.badtime);
             const clickTimeNum = Number(clickTime);
+            const currentCaptchaLevel = Number(data.level || 1);
 
-            console.log(badtimeNum,clickTime);
+            console.log(badtimeNum, clickTime);
             // 1. 먼저 시간 체크
             if (clickTimeNum < badtimeNum) {
-                db.query(
-                    "UPDATE users SET login_attempts = login_attempts + 1, captchatype = ? WHERE userid = ?",
-                    [type, userId]
-                );
+                // 먼저 현재 실패 횟수를 조회해서 1회였다면 이번에 2회가 되므로 락아웃 시간을 세팅해야 합니다.
+                db.query("SELECT login_attempts FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
+                    const currentAttempts = userRows[0]?.login_attempts || 0;
+                    const nextAttempts = currentAttempts + 1;
+                    const now = nextAttempts >= 2 ? Date.now() : 0; // 2회 이상이면 현재 시간 기록
+
+                    db.query(
+                        "UPDATE users SET login_attempts = login_attempts + 1, captchatype = ?, lockout_time = ? WHERE userid = ?",
+                        [type, now, userId]
+                    );
+                });
                 return res.json({ ok: false, reason: "too_fast" });
             }
+            // 조건 2: badtime ~ badtime + 0.5초 사이에 정확히 누른 경우 ⭕ (Level 2 성공)
+            const isLevel2Match = (clickTimeNum >= badtimeNum) && (clickTimeNum <= badtimeNum + 0.5);
             // ❌ 사용한 캡차 데이터 삭제 (1회성 유지)
             db.query("DELETE FROM captcha WHERE captchaid = ?", [captchaId]);
 
             // 2. 캡차 결과에 따른 사용자 실패 횟수 후처리
             if (String(answer) === data.answer) {
                 // 캡차 정답 ⭕ : 해당 유저의 로그인 실패 횟수를 0으로 초기화
-                db.query(
-                    "UPDATE users SET login_attempts = 0,captchatype = NULL WHERE userid = ?",
-                    [userId],
-                    (updateErr) => {
-                        if (updateErr) console.error("실패 횟수 초기화 실패:", updateErr);
-
-                        // 성공 응답 반환
-                        return res.json({ ok: true, reason: "success" });
-                    }
-                );
-            } else {
-                // 캡차 오답 ❌ : 해당 유저의 로그인 실패 횟수를 +1 증가
-                db.query(
-                    "UPDATE users SET login_attempts = login_attempts + 1, captchatype = ? WHERE userid = ?",
-                    [type,userId],
-                    (updateErr) => {
-                        if (updateErr) {
-                            console.error(updateErr);
-
-                            return res.status(500).json({
-                                ok: false,
-                                reason: "db_error"
-                            });
+                if (currentCaptchaLevel === 2) {
+                    db.query(
+                        "UPDATE users SET login_attempts = 2, captchatype = NULL WHERE userid = ?",
+                        [userId],
+                        (updateErr) => {
+                            if (updateErr) console.error(updateErr);
+                            return res.json({ ok: true, reason: "success", clearAll: true });
                         }
+                    );
+                }
+                // 만약 [레벨 1 문제]에서 0.5초 타이밍 조절을 성공하여 레벨 2 진입 자격을 딴 경우
+                else if (isLevel2Match) {
+                    // 유저의 상태 플래그값을 변경하여 다음 GET 요청 시 레벨 2 문제를 강제 배정하도록 유도
+                    db.query(
+                        "UPDATE users SET login_attempts = -222, captchatype = NULL WHERE userid = ?",
+                        [userId],
+                        (updateErr) => {
+                            if (updateErr) console.error("레벨 상태 기록 실패:", updateErr);
 
-                        // 실패 응답 반환
-                        return res.json({ ok: false, reason: "fail" });
-                    }
-                );
+                            // 프론트엔드에게 통과가 아니라 "다음 레벨 문제를 새로 요청하라"는 신호를 전송
+                            return res.json({ ok: true, reason: "level2_unlocked", goToLevel2: true });
+                        }
+                    );
+                }
+                // 일반 성공 처리 (시간 초과 상태로 글자만 맞춤) -> 기획에 따라 실패 처리 혹은 재시도 유도 가능
+                else {
+                    db.query(
+                        "UPDATE users SET login_attempts = 0, captchatype = NULL WHERE userid = ?",
+                        [userId],
+                        (updateErr) => {
+                            if (updateErr) console.error(updateErr);
+                            return res.json({ ok: true, reason: "success", clearAll: true });
+                        }
+                    );
+                }
+            } else {
+                if (currentCaptchaLevel === 2) {
+                    // 🎯 [추가] 레벨 2 문제를 틀린 경우 실패 횟수를 0으로 초기화 (최종 실패 처리 후 리셋 등)
+                    db.query(
+                        "UPDATE users SET login_attempts = 0, captchatype = NULL WHERE userid = ?",
+                        [userId],
+                        (updateErr) => {
+                            if (updateErr) console.error("레벨 2 오답 후 초기화 실패:", updateErr);
+                            return res.json({ ok: false, reason: "fail", level2_fail: true });
+                        }
+                    );
+                } else {
+                    // 레벨 1 문제를 틀린 경우 실패 횟수 증가 및 2회 도달 시 락아웃 처리
+                    db.query("SELECT login_attempts FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
+                        const currentAttempts = userRows[0]?.login_attempts || 0;
+                        const nextAttempts = currentAttempts + 1;
+                        const now = nextAttempts >= 2 ? Date.now() : 0;
+
+                        db.query(
+                            "UPDATE users SET login_attempts = login_attempts + 1, captchatype = ?, lockout_time = ? WHERE userid = ?",
+                            [type, now, userId],
+                            (updateErr) => {
+                                if (updateErr) {
+                                    console.error(updateErr);
+                                    return res.status(500).json({ ok: false, reason: "db_error" });
+                                }
+                                return res.json({ ok: false, reason: "fail" });
+                            }
+                        );
+                    });
+                }
             }
         }
     );

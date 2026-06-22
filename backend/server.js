@@ -1,6 +1,7 @@
 const express = require("express");
 const mysql = require("mysql2");
 const cors = require("cors");
+const session = require("express-session");
 const nodemailer = require("nodemailer");
 const path = require("path");
 require("dotenv").config();
@@ -9,7 +10,10 @@ const app = express();
 const CODE_TTL_MS = 3 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 30 * 1000;
 
-app.use(cors());
+app.use(cors({
+    origin: process.env.VITE_FRONT_URL,
+    credentials: true
+}));
 app.use(express.json());
 
 const db = mysql.createConnection({
@@ -65,7 +69,8 @@ db.connect((err) => {
         email VARCHAR(100) UNIQUE,
         password VARCHAR(255),
         captchatype ENUM('A','B','C','D'),
-        login_attempts INT DEFAULT 0
+        login_attempts INT DEFAULT 0,
+        lockout_time BIGINT DEFAULT 0
     )
 `;
 
@@ -107,6 +112,7 @@ db.connect((err) => {
         });
     });
 });
+
 
 app.post("/send-email-code", async (req, res) => {
     const { email } = req.body;
@@ -239,6 +245,17 @@ app.post("/signup", async (req, res) => {
     }
 });
 
+app.use(session({
+    secret: "your-secret-key",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        httpOnly: true,
+        secure: false,   // 로컬이면 false
+        sameSite: "lax"
+    }
+}));
+
 app.use(express.json());
 // 라우터 연결
 
@@ -248,7 +265,9 @@ app.use(
 );
 
 app.use("/mvcaptcha", require("./routes/mvcaptcha"));
-app.use("/mousebehavior", require("./routes/mousebehavior")(db));
+const mousebehaviorRouter = require("./routes/mousebehavior")(db);
+app.use(mousebehaviorRouter);
+app.use("/mousebehavior", mousebehaviorRouter);
 
 const cleanupCaptcha = require("./routes/cleanupCaptcha");
 cleanupCaptcha(db);
