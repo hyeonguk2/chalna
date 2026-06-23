@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 const API_URL = "http://localhost:3001";
 
 export default function Signup() {
+  const navigate = useNavigate();
   const [userid, setUserid] = useState("");
   const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
