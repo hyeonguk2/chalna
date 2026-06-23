@@ -211,7 +211,11 @@ export default function HomePage() {
         if (!startTime) return;
 
         const answeredAt = new Date().getTime();
-        const answeredInDeadTime = true;
+        const answeredInDeadTime = 
+            ended &&
+            endedTime &&
+            answeredAt- endedTime <= 5000;
+
         const timeDiffMs = answeredAt - startTime;
         const t = timeDiffMs / 1000;
         setFinalSolveTime(t);
