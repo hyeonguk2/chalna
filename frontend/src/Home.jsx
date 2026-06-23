@@ -121,16 +121,21 @@ export default function HomePage() {
                 message: `서버 응답을 읽을 수 없습니다. (${response.status})`
             }));
 
-            if (!response.ok || !result.success) {
+            if (!response.ok || !result.success || result.isBot) {
                 setLoginError(result.message || "로그인 실패");
                 alert(result.message);
                 return;
             }
 
-            const sessionResponse = await fetch("/api/me");
+            const sessionResponse = await fetch("/api/me", { credentials: "include" });
             const sessionData = await sessionResponse.json();
 
-            setSessionUser(sessionData.user || { userid: loginUsername });
+            if (!sessionResponse.ok || !sessionData.authenticated || !sessionData.user) {
+                setLoginError("Session verification failed");
+                return;
+            }
+
+            setSessionUser(sessionData.user);
             setLoginUsername("");
             setLoginPassword("");
             setMouseTrajectory([]);

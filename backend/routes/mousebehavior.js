@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const { createClient } = require('redis');
+const bcrypt = require('bcryptjs');
 
 const SESSION_TTL_SECONDS = 24 * 60 * 60;
 const redisClient = createClient({
@@ -219,15 +220,29 @@ module.exports = (db) => {
                 }
 
                 // (2) 실제 DB 연동: 아이디/비밀번호 검증
-                const sql = "SELECT * FROM users WHERE userid = ? AND password = ?";
-                db.query(sql, [payload.username, payload.password], async (err, results) => {
+                const sql = "SELECT * FROM users WHERE userid = ?";
+                db.query(sql, [payload.username], async (err, results) => {
                     if (err) {
                         console.error("DB Query Error:", err);
                         return res.status(500).json({ success: false, message: "내부 서버 오류 (DB)" });
                     }
 
                     // ❌ [오답 처리] 일치하는 유저 정보가 없을 때 (비밀번호 틀림 등)
-                    if (results.length === 0) {
+                    const user = results[0];
+                    let passwordMatches = false;
+
+                    try {
+                        passwordMatches = user && (
+                            user.password.startsWith("$2")
+                                ? await bcrypt.compare(payload.password, user.password)
+                                : payload.password === user.password
+                        );
+                    } catch (passwordError) {
+                        console.error("Password verification error:", passwordError);
+                        return res.status(500).json({ success: false, message: "Password verification failed" });
+                    }
+
+                    if (!passwordMatches) {
                         // 기존 실패 횟수를 조회하여 2회가 되는 순간 락아웃 처리
                         db.query("SELECT login_attempts FROM users WHERE userid = ?", [payload.username], (selErr, rows) => {
                             const currentAttempts = rows[0]?.login_attempts || 0;
@@ -245,6 +260,22 @@ module.exports = (db) => {
 
                     // (3) 팀원이 만든 캡차 모듈 결과값 검증
                     // 프론트에서 captchaData가 안 넘어왔거나, answer가 true가 아니라면 불허 처리 ❌
+                    if (!user.password.startsWith("$2")) {
+                        try {
+                            const passwordHash = await bcrypt.hash(payload.password, 12);
+                            await new Promise((resolve, reject) => {
+                                db.query(
+                                    "UPDATE users SET password = ? WHERE id = ?",
+                                    [passwordHash, user.id],
+                                    (updateErr) => updateErr ? reject(updateErr) : resolve()
+                                );
+                            });
+                        } catch (passwordUpgradeError) {
+                            console.error("Password upgrade error:", passwordUpgradeError);
+                            return res.status(500).json({ success: false, message: "Password upgrade failed" });
+                        }
+                    }
+
                     if (!payload.captchaData || payload.captchaData.answer !== true) {
                         return res.status(401).json({
                             success: false,
@@ -274,7 +305,7 @@ module.exports = (db) => {
                     // ⭕ [최종 인증 성공] 일반인인 경우 세션 생성 및 로그인 처리
                     let sessionToken;
                     try {
-                        sessionToken = await createSession(results[0]);
+                        sessionToken = await createSession(user);
                         setSessionCookie(res, sessionToken);
                     } catch (error) {
                         console.error("Session create error:", error);
