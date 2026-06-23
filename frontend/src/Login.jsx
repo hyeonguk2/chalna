@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 export default function Login() {
@@ -46,7 +46,10 @@ export default function Login() {
     const loginData = {
       username: username,
       password: password,
-      mouseTrajectory: mouseTrajectory // 수집한 마우스 데이터 배열 추가!
+      behaviorMetrics: {
+        mouseTrajectory: mouseTrajectory,
+        clickData: []
+      }
     };
 
     // 작동 여부 확인용 로컬 콘솔 로그
@@ -62,7 +65,10 @@ export default function Login() {
         body: JSON.stringify(loginData)
       });
 
-      const result = await response.json();
+      const result = await response.json().catch(() => ({
+        success: false,
+        message: `서버 응답을 읽을 수 없습니다. (${response.status})`
+      }));
       
       if (result.success) {
         alert("로그인 성공!");

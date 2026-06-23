@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 const API_URL = "http://localhost:3001";
 
@@ -178,6 +178,7 @@ export default function Signup() {
       }
 
       alert("회원가입이 완료되었습니다.");
+      navigate("/");
     } catch (err) {
       console.error(err);
       alert("서버 오류가 발생했습니다.");
