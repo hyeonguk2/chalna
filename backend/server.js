@@ -4,6 +4,7 @@ const cors = require("cors");
 const session = require("express-session");
 const nodemailer = require("nodemailer");
 const path = require("path");
+const bcrypt = require("bcryptjs");
 require("dotenv").config();
 
 const app = express();
@@ -228,9 +229,11 @@ app.post("/signup", async (req, res) => {
             return res.status(403).send("email not verified");
         }
 
+        const passwordHash = await bcrypt.hash(password, 12);
+
         await query(
             "INSERT INTO users (userid, password, email) VALUES (?, ?, ?)",
-            [userid, password, email]
+            [userid, passwordHash, email]
         );
 
         await query("DELETE FROM email_verifications WHERE email = ?", [email]);
