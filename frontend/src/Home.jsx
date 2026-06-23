@@ -4,6 +4,7 @@ import "./App.css";
 
 export default function HomePage() {
     const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
+    const ANSWER_TIME_LIMIT_MS = 5000;
 
     //모달용
     const videoRef = useRef(null); //영상모듈
@@ -23,19 +24,22 @@ export default function HomePage() {
     const [options, setOptions] = useState([]);  //문제 선택지
     const [guideText, setGuideText] = useState(""); //영상 위 문자
     const [startTime, setStartTime] = useState(null); // 시작시간 
-    const [badtime, setBadTime] = useState(null); // 찍기 및 빠른 클릭 차단
     const [type, setType] = useState(null); // 영상 타입
     const [duration, setDuration] = useState(0);
+    const [currentLevel, setCurrentLevel] = useState(1);
+    const [solveElapsed, setSolveElapsed] = useState(0);
+    const [finalSolveTime, setFinalSolveTime] = useState(null);
     // ⭐️ [추가] 캡차 성공 여부를 기록할 상태 변수
     const [isCaptchaPassed, setIsCaptchaPassed] = useState(false);
 
-    const [userId] = useState("a");       // 💡 테스트용 임의 ID 저장 변수 추가
     const [sessionUser, setSessionUser] = useState(null);
     const [loginUsername, setLoginUsername] = useState("");
     const [loginPassword, setLoginPassword] = useState("");
     const [mouseTrajectory, setMouseTrajectory] = useState([]);
     const [loginError, setLoginError] = useState("");
     const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+    const formatSeconds = (value) => `${Number(value || 0).toFixed(1)}초`;
 
     //users table 에 login_attempts 컬럼을 임시로 추가했는데 이걸 fk로 따로 테이블 만들어서 연결할지 결정필요
     //fk로 별도로 만들면 captcha 시도횟수, 시도한 영상 제목이나 유형을 넣을 컬럼이 필요할것같아요.(같은 captcha시도 방지)
@@ -167,14 +171,17 @@ export default function HomePage() {
     };
 
     //영상 캡차 불러오기
-    const startCaptcha = async () => {
+    const startCaptcha = async (forceType = "") => {
         reset();
         if (!loginUsername) {
             alert("아이디를 먼저 입력해주세요.");
             return;
         }
 
-        const res = await fetch(`${API}/mvcaptcha?userId=${loginUsername}`);
+        const params = new URLSearchParams({ userId: loginUsername });
+        if (forceType) params.set("forceType", forceType);
+
+        const res = await fetch(`${API}/mvcaptcha?${params.toString()}`);
         const data = await res.json();
 
         // 2. 영상 요청
@@ -191,8 +198,8 @@ export default function HomePage() {
         setGuideText(data.question);
         setCaptchaId(data.captchaId);   // ★ 중요
         setOptions(data.options);   // ★ 중요
-        setBadTime(data.badtime);
         setType(data.type);
+        setCurrentLevel(data.currentLevel || 1);
         if (data.type === "C" || data.type === "D") {
             setDuration(5);
         }
@@ -202,6 +209,12 @@ export default function HomePage() {
     // 정답 전송
     const handleAnswer = (answer) => {
         if (!startTime) return;
+
+        const answeredAt = new Date().getTime();
+        const answeredInDeadTime = true;
+        const timeDiffMs = answeredAt - startTime;
+        const t = timeDiffMs / 1000;
+        setFinalSolveTime(t);
 
         // 1. 버튼을 누른 즉시 타이머 관련 상태를 모두 초기화/종료합니다. (스쳐 지나가는 현상 방지)
         setEndedTime(null);
@@ -214,15 +227,6 @@ export default function HomePage() {
             imgIntervalRef.current = ""; // 빈 값으로 초기화
         }
 
-        const timeDiffMs = Date.now() - startTime;
-        const t = timeDiffMs / 1000;
-
-        // 2. 만약 영상이 끝난 후에 누른 거였다면 (남아있던 remainTime 기반으로 체크)
-        // 5초 타임아웃 처리는 타이머 useEffect가 아니라 여기서 직접 계산해 자릅니다.
-        // (주의: 위에서 remainTime을 0으로 만들기 전인 원래 상태를 기준으로 체크해야 하므로, 
-        //  안전하게 처리하기 위해 ended 상태가 참이었고 제한시간을 넘겼는지만 따로 확인하거나 
-        //  현재는 이미 handleAnswer가 실행되었으므로 바로 submit으로 넘겨도 무방합니다.)
-
         const video = videoRef.current;
         if (video) {
             video.pause();
@@ -230,11 +234,11 @@ export default function HomePage() {
         console.log(t);
 
         // 정답 전송
-        submitCaptcha(t, answer);
+        submitCaptcha(t, answer, answeredInDeadTime);
     };
 
     //영상/이미지 캡차 검증
-    const submitCaptcha = async (t, answer) => {
+    const submitCaptcha = async (t, answer, answeredInDeadTime = false) => {
         // 1. [강제 정지] 이미지 가상 타이머 인터벌 즉시 정지 및 값 고정
         if (imgIntervalRef.current) {
             clearInterval(imgIntervalRef.current);
@@ -242,19 +246,19 @@ export default function HomePage() {
 
             // 클릭한 시점(t) 기준으로 progress와 remainTime을 화면에 강제 고정
             const virtualDuration = 5;
-            const currentTimeSec = t / 1000;
+            const currentTimeSec = t;
             setProgress(Math.min((currentTimeSec / virtualDuration) * 100, 100));
             setRemainTime(Math.min(currentTimeSec, virtualDuration));
         }
 
         // 2. [강제 정지] 비디오 캡차일 경우 비디오 재생도 즉시 일시정지
-        if (type === "V" && videoRef.current) {
+        if (type !== "C" && type !== "D" && videoRef.current) {
             videoRef.current.pause();
         }
 
         // 3. 캡챠 종료 상태 지정
         setEnded(true);
-        setEndedTime(Date.now());
+        setEndedTime(new Date().getTime());
 
         // 4. 서버 검증 요청 수행
         try {
@@ -266,12 +270,23 @@ export default function HomePage() {
                     answer,
                     userId: loginUsername,
                     clickTime: t,
-                    type
+                    type,
+                    answeredInDeadTime,
+                    solveTime: Number(t.toFixed(3))
                 })
             });
 
             const data = await res.json();
             console.log(data.reason);
+
+            if (data.goToLevel2 || data.reason === "d_stage_unlocked") {
+                setIsCaptchaPassed(false);
+                setResult("d_stage");
+                loginTransitionRef.current = setTimeout(() => {
+                    startCaptcha(data.nextType || "D");
+                }, 900);
+                return;
+            }
 
             if (data.reason === "success") {
                 setIsCaptchaPassed(true);
@@ -304,20 +319,26 @@ export default function HomePage() {
 
             videoRef.current.play().then(() => {
                 setStartTime(Date.now());
+                setSolveElapsed(0);
+                setFinalSolveTime(null);
             }).catch(err => console.log("자동 재생 차단 또는 오류:", err));
         }
 
         // 2. 이미지 타입('C')일 때 제어 (가상 타이머 구동)
         else if (type === "C" || type === "D") {
             const virtualDuration = 5; // 5초 동안 이미지 활성화 및 CSS 애니메이션 진행
-            setStartTime(Date.now());
+            const imageStartTime = new Date().getTime();
+            setTimeout(() => {
+                setStartTime(imageStartTime);
+                setSolveElapsed(0);
+                setFinalSolveTime(null);
+            }, 0);
 
             const intervalImg = setInterval(() => {
-                const elapsed = (Date.now() - Date.now()) // 기본 공식 기반 계산
                 setStartTime(prevStartTime => {
                     if (!prevStartTime) return prevStartTime;
 
-                    const currentTimeSec = (Date.now() - prevStartTime) / 1000;
+                    const currentTimeSec = (new Date().getTime() - prevStartTime) / 1000;
 
                     // 진행바 업데이트
                     setProgress((currentTimeSec / virtualDuration) * 100);
@@ -326,7 +347,7 @@ export default function HomePage() {
                     if (currentTimeSec >= virtualDuration) {
                         clearInterval(intervalImg);
                         setEnded(true);
-                        setEndedTime(Date.now());
+                        setEndedTime(new Date().getTime());
                         setRemainTime(5); // 종료 후 정답 마킹 추가 5초 카운트다운 시작
                     }
                     return prevStartTime;
@@ -358,6 +379,16 @@ export default function HomePage() {
         return () => cancelAnimationFrame(raf);
     }, [videoUrl, type]);
 
+    useEffect(() => {
+        if (!started || !startTime || result !== null) return;
+
+        const timer = setInterval(() => {
+            setSolveElapsed((new Date().getTime() - startTime) / 1000);
+        }, 100);
+
+        return () => clearInterval(timer);
+    }, [started, startTime, result]);
+
     // 5초 카운트다운 및 0초 도달 시 자동 실패 처리
     // 5초 카운트다운 및 0초 도달 시 자동 실패 처리
     useEffect(() => {
@@ -365,8 +396,8 @@ export default function HomePage() {
         if (!endedTime || result !== null) return;
 
         const timer = setInterval(() => {
-            const totalDuration = 5000;
-            const elapsed = Date.now() - endedTime;
+            const totalDuration = ANSWER_TIME_LIMIT_MS;
+            const elapsed = new Date().getTime() - endedTime;
             const remain = Math.max(0, totalDuration - elapsed);
 
             const remainSeconds = remain / 1000; // 밀리초를 초 단위로 변환
@@ -378,7 +409,7 @@ export default function HomePage() {
             }
 
             // 0초에 도달했을 때
-            if (remain <= 0 || remain < badtime) {
+            if (remain <= 0) {
                 clearInterval(timer);
                 setEndedTime(null);
 
@@ -397,12 +428,13 @@ export default function HomePage() {
                         video.pause();
                     }
                 }
-                submitCaptcha(currentVerifyTime, "");
+                setFinalSolveTime(startTime ? (new Date().getTime() - startTime) / 1000 : currentVerifyTime);
+                submitCaptcha(currentVerifyTime, "", false);
             }
         }, 50);
 
         return () => clearInterval(timer);
-    }, [endedTime, type, duration, badtime, result]); // ⭐️ 의존성 배열에 result 추가
+    }, [endedTime, type, duration, result, startTime]); // ⭐️ 의존성 배열에 result 추가
 
     //영상 초기화
     const reset = () => {
@@ -430,11 +462,13 @@ export default function HomePage() {
         setGuideText("");
         setStartTime(null);
         setProgress(0);
-        setBadTime(Infinity);
         setEndedTime(null);
         setRemainTime(0);
         setEnded(false);
         setResult(null);
+        setCurrentLevel(1);
+        setSolveElapsed(0);
+        setFinalSolveTime(null);
 
 
     };
@@ -490,6 +524,11 @@ export default function HomePage() {
                                             <div>
                                                 <p className="text-sm text-violet-200/70">보안 인증</p>
                                                 <h3 className="mt-1 text-xl font-semibold text-white">CAPTCHA 챌린지</h3>
+                                                {started && (
+                                                    <p className="mt-1 text-sm text-zinc-400">
+                                                        {currentLevel === "D" ? "D 단계" : `${currentLevel}단계`}
+                                                    </p>
+                                                )}
                                             </div>
                                             <button
                                                 onClick={() => {
@@ -531,6 +570,10 @@ export default function HomePage() {
                                                 />)}
                                             {started && result === null && (
                                                 <>
+                                                    <div className="absolute right-4 top-4 z-40 flex flex-col items-end gap-1 rounded-lg bg-black/60 px-3 py-2 text-sm text-white pointer-events-none">
+                                                        <span>풀이 {formatSeconds(finalSolveTime ?? solveElapsed)}</span>
+                                                        {ended && <span className="text-red-300">제한 {remainTime}초</span>}
+                                                    </div>
                                                     <div className="absolute top-4 left-0 w-full z-30 pointer-events-none">
                                                         <div className="mx-auto w-fit max-w-[90%] bg-black/50 text-white text-xl px-3 py-1 rounded-lg">
                                                             {ended ? "" : guideText}
@@ -643,13 +686,22 @@ export default function HomePage() {
                                                                 ✓
                                                             </div>
                                                             <div className="text-2xl font-bold text-green-400">사람입니다</div>
+                                                            <p className="mt-2 text-sm text-zinc-300">풀이시간 {formatSeconds(finalSolveTime ?? solveElapsed)}</p>
                                                             <p className="mt-2 text-sm text-zinc-300">로그인 중입니다...</p>
+                                                        </>
+                                                    ) : result === "d_stage" ? (
+                                                        <>
+                                                            <div className="mb-4 text-2xl font-bold text-violet-200">
+                                                                D 단계로 이동합니다
+                                                            </div>
+                                                            <p className="text-sm text-zinc-300">풀이시간 {formatSeconds(finalSolveTime ?? solveElapsed)}</p>
                                                         </>
                                                     ) : (
                                                         <>
                                                             <div className={`mb-4 text-2xl font-bold ${result === "too_fast" ? "text-yellow-400" : "text-red-400"}`}>
-                                                                {result === "too_fast" ? "너무 빠름" : "실패"}
+                                                                {result === "too_fast" ? "너무 빠름" : result === "timeout" ? "시간 초과" : "실패"}
                                                             </div>
+                                                            <p className="mb-4 text-sm text-zinc-300">풀이시간 {formatSeconds(finalSolveTime ?? solveElapsed)}</p>
                                                             <button
                                                                 onClick={reset}
                                                                 className="rounded-xl bg-violet-500 px-5 py-2 font-medium text-white transition hover:bg-violet-400"

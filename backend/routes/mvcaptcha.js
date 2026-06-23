@@ -72,7 +72,7 @@ function shuffle(array) {
 // 캡차 생성 (오류 해결 버전)
 // =========================
 router.get("/", async (req, res) => {
-    const { userId } = req.query;
+    const { userId, forceType } = req.query;
     const id = uuidv4();
 
     // 🎬 영상 폴더 세팅
@@ -82,11 +82,19 @@ router.get("/", async (req, res) => {
         .filter(file => fs.statSync(path.join(captchaTypeDir, file)).isDirectory());
 
     // Set FORCE_CAPTCHA_TYPE=D locally to test only one CAPTCHA type.
-    const forcedCaptchaType = process.env.FORCE_CAPTCHA_TYPE;
+    const requestedForcedType = forceType || process.env.FORCE_CAPTCHA_TYPE;
+    const forcedCaptchaType = ["A", "B", "C", "D"].includes(requestedForcedType)
+        ? requestedForcedType
+        : null;
     if (forcedCaptchaType) {
         captchaTypes = captchaTypes.filter(
             (file) => file === `captchatype_${forcedCaptchaType}`
         );
+
+        // D 단계 전용 자산이 아직 없으면 C 이미지 자산을 D 단계 문제로 재사용한다.
+        if (captchaTypes.length === 0 && forcedCaptchaType === "D") {
+            captchaTypes = ["captchatype_C"];
+        }
     }
 
     // 💡 변수 스코프 에러 방지를 위해 확실하게 let으로 최상단 선언
@@ -119,7 +127,7 @@ router.get("/", async (req, res) => {
     }
 
     const randomCaptchaType = captchaTypes[Math.floor(Math.random() * captchaTypes.length)];
-    const captchaType = randomCaptchaType.replace("captchatype_", "");
+    const captchaType = forcedCaptchaType === "D" ? "D" : randomCaptchaType.replace("captchatype_", "");
 
     const metaPath = path.join(captchaTypeDir, randomCaptchaType, "meta.json");
     if (!fs.existsSync(metaPath)) {
@@ -188,7 +196,7 @@ router.get("/", async (req, res) => {
         question,
         options: choices,
         type: captchaType,
-        currentLevel: isUserTargetLevel2 ? 2 : 1
+        currentLevel: captchaType === "D" ? "D" : isUserTargetLevel2 ? 2 : 1
     });
 });
 
@@ -207,7 +215,9 @@ router.post("/video", (req, res) => {
             let videoUrl = "";
 
             if (data.captchatype === "C" || data.captchatype === "D") {
-                videoUrl = `/videos/captchatype/captchatype_${data.captchatype}/img/${data.video}.png`;
+                const dImagePath = path.join(__dirname, "..", "public", "videos", "captchatype", "captchatype_D", "img", `${data.video}.png`);
+                const assetType = data.captchatype === "D" && !fs.existsSync(dImagePath) ? "C" : data.captchatype;
+                videoUrl = `/videos/captchatype/captchatype_${assetType}/img/${data.video}.png`;
             } else {
                 videoUrl = `/videos/captchatype/captchatype_${data.captchatype}/video/${data.video}.mp4`;
             }
@@ -223,7 +233,7 @@ router.post("/video", (req, res) => {
 // =========================
 router.post("/verify", (req, res) => {
     // 1. 프론트엔드에서 전송한 userid(로그인 ID)를 추가로 받습니다.
-    const { captchaId, answer, userId, clickTime, type } = req.body;
+    const { captchaId, answer, userId, clickTime, type, answeredInDeadTime } = req.body;
 
     // 만약 로그인 시도가 아니라 비로그인 상태(예: ID 입력 전)에서 호출되었다면 방어 코드
     if (!userId) {
@@ -252,8 +262,33 @@ router.post("/verify", (req, res) => {
             const badtimeNum = Number(data.badtime);
             const clickTimeNum = Number(clickTime);
             const currentCaptchaLevel = Number(data.level || 1);
+            const failReason = answer === "" ? "timeout" : "fail";
 
             console.log(badtimeNum, clickTime);
+            const solveTime =
+    (Date.now() - Number(data.created_at)) / 1000;
+
+let aiScore = 0;
+
+if (solveTime < 1.5) aiScore += 50;
+
+if (answeredInDeadTime === true)
+    aiScore += 60;
+
+const shouldEnterDStage =
+    currentCaptchaLevel !== 2 &&
+    data.captchatype !== "D" &&
+    aiScore >= 60;
+
+console.log("D_STAGE_CHECK", {
+    solveTime,
+    answeredInDeadTime,
+    aiScore,
+    currentCaptchaLevel,
+    captchaType: data.captchatype,
+    shouldEnterDStage
+});
+
             // 1. 먼저 시간 체크
             if (clickTimeNum < badtimeNum) {
                 // 먼저 현재 실패 횟수를 조회해서 1회였다면 이번에 2회가 되므로 락아웃 시간을 세팅해야 합니다.
@@ -269,8 +304,8 @@ router.post("/verify", (req, res) => {
                 });
                 return res.json({ ok: false, reason: "too_fast" });
             }
-            // 조건 2: badtime ~ badtime + 0.5초 사이에 정확히 누른 경우 ⭕ (Level 2 성공)
-            const isLevel2Match = (clickTimeNum >= badtimeNum) && (clickTimeNum <= badtimeNum + 0.5);
+            // 조건 2: 영상/이미지 종료 후 정답 제한시간(dead time) 안에 맞춘 경우 다음 단계로 보낸다.
+            
             // ❌ 사용한 캡차 데이터 삭제 (1회성 유지)
             db.query("DELETE FROM captcha WHERE captchaid = ?", [captchaId]);
 
@@ -288,16 +323,17 @@ router.post("/verify", (req, res) => {
                     );
                 }
                 // 만약 [레벨 1 문제]에서 0.5초 타이밍 조절을 성공하여 레벨 2 진입 자격을 딴 경우
-                else if (isLevel2Match) {
-                    // 유저의 상태 플래그값을 변경하여 다음 GET 요청 시 레벨 2 문제를 강제 배정하도록 유도
+                else if (shouldEnterDStage) {
+                    // 유저의 상태 플래그값을 변경하여 다음 GET 요청 시 후속 문제를 배정하도록 유도
                     db.query(
                         "UPDATE users SET login_attempts = -222, captchatype = NULL WHERE userid = ?",
                         [userId],
                         (updateErr) => {
                             if (updateErr) console.error("레벨 상태 기록 실패:", updateErr);
 
-                            // 프론트엔드에게 통과가 아니라 "다음 레벨 문제를 새로 요청하라"는 신호를 전송
-                            return res.json({ ok: true, reason: "level2_unlocked", goToLevel2: true });
+                            // 프론트엔드에게 통과가 아니라 "D 단계 문제를 새로 요청하라"는 신호를 전송
+                            
+                            return res.json({ ok: true, reason: "d_stage_unlocked", goToLevel2: true, nextType: "D" });
                         }
                     );
                 }
@@ -320,7 +356,7 @@ router.post("/verify", (req, res) => {
                         [userId],
                         (updateErr) => {
                             if (updateErr) console.error("레벨 2 오답 후 초기화 실패:", updateErr);
-                            return res.json({ ok: false, reason: "fail", level2_fail: true });
+                            return res.json({ ok: false, reason: failReason, level2_fail: true });
                         }
                     );
                 } else {
@@ -338,7 +374,7 @@ router.post("/verify", (req, res) => {
                                     console.error(updateErr);
                                     return res.status(500).json({ ok: false, reason: "db_error" });
                                 }
-                                return res.json({ ok: false, reason: "fail" });
+                                return res.json({ ok: false, reason: failReason });
                             }
                         );
                     });
