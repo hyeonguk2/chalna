@@ -3,7 +3,7 @@ import { useRef, useState, useEffect } from "react";
 import "./App.css";
 
 export default function HomePage() {
-    const API = import.meta.env.VITE_API_URL;
+    const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
     //모달용
     const videoRef = useRef(null); //영상모듈
@@ -16,6 +16,7 @@ export default function HomePage() {
     const [remainTime, setRemainTime] = useState(0); //영상 후 5초 타이머
     const [progress, setProgress] = useState(0); //영상typeA 상태바
     const imgIntervalRef = useRef(null); // ⭐️ [추가] 이미지용 가상 타이머 Ref
+    const loginTransitionRef = useRef(null);
 
     //캡챠데이터용
     const [captchaId, setCaptchaId] = useState(null); //문제 고유id
@@ -34,6 +35,7 @@ export default function HomePage() {
     const [loginPassword, setLoginPassword] = useState("");
     const [mouseTrajectory, setMouseTrajectory] = useState([]);
     const [loginError, setLoginError] = useState("");
+    const [isLoggingIn, setIsLoggingIn] = useState(false);
 
     //users table 에 login_attempts 컬럼을 임시로 추가했는데 이걸 fk로 따로 테이블 만들어서 연결할지 결정필요
     //fk로 별도로 만들면 captcha 시도횟수, 시도한 영상 제목이나 유형을 넣을 컬럼이 필요할것같아요.(같은 captcha시도 방지)
@@ -86,25 +88,17 @@ export default function HomePage() {
         };
     }, []);
 
-    const login = async (event) => {
-        event.preventDefault();
-        setLoginError("");
-
-        // 🔒 [추가] 로그인 버튼을 눌렀는데 아직 캡차를 풀지 않았다면 입구 컷
-        if (!isCaptchaPassed) {
-            alert("보안을 위해 캡차 인증을 먼저 완료해 주세요.");
-            return;
-        }
-
+    const performLogin = async () => {
+        setIsLoggingIn(true);
         const loginData = {
             username: loginUsername,
             password: loginPassword,
             behaviorMetrics: {
-                mouseTrajectory,
-                clickData: []
+            mouseTrajectory,
+            clickData: []
             },
             captchaData: {
-                answer: isCaptchaPassed // true 값이 넘어감
+                answer: true
             }
         };
 
@@ -123,6 +117,7 @@ export default function HomePage() {
 
             if (!response.ok || !result.success || result.isBot) {
                 setLoginError(result.message || "로그인 실패");
+                setIsLoggingIn(false);
                 alert(result.message);
                 return;
             }
@@ -132,6 +127,7 @@ export default function HomePage() {
 
             if (!sessionResponse.ok || !sessionData.authenticated || !sessionData.user) {
                 setLoginError("Session verification failed");
+                setIsLoggingIn(false);
                 return;
             }
 
@@ -142,7 +138,21 @@ export default function HomePage() {
         } catch (error) {
             console.error("login failed:", error);
             setLoginError("서버 연결 실패");
+            setIsLoggingIn(false);
         }
+    };
+
+    const login = (event) => {
+        event.preventDefault();
+        setLoginError("");
+
+        // 로그인 버튼은 CAPTCHA 안내 화면만 열고, 실제 영상은 안내 화면의 시작 버튼으로 재생한다.
+        if (!isCaptchaPassed) {
+            setCaptchaopen(true);
+            return;
+        }
+
+        performLogin();
     };
 
     const logout = async () => {
@@ -152,12 +162,8 @@ export default function HomePage() {
             setSessionUser(null);
             setIsCaptchaPassed(false);
             setLoginError("");
+            setIsLoggingIn(false);
         }
-    };
-
-    const openVideoCaptcha = async () => {
-        reset();
-        setCaptchaopen(true);
     };
 
     //영상 캡차 불러오기
@@ -187,8 +193,8 @@ export default function HomePage() {
         setOptions(data.options);   // ★ 중요
         setBadTime(data.badtime);
         setType(data.type);
-        if (data.type === "C") {
-            setDuration(data.badtime); // 백엔드에서 이미지 제한시간을 주면 data.duration 등으로 대체 가능
+        if (data.type === "C" || data.type === "D") {
+            setDuration(5);
         }
         setStarted(true);
     };
@@ -266,13 +272,20 @@ export default function HomePage() {
 
             const data = await res.json();
             console.log(data.reason);
-            setResult(data.reason || "fail");
-            // ⭐️ [추가] 백엔드 검증 결과가 success면 통과 상태로 변경
+
             if (data.reason === "success") {
                 setIsCaptchaPassed(true);
-            } else {
-                setIsCaptchaPassed(false);
+                setResult("human");
+                loginTransitionRef.current = setTimeout(() => {
+                    setCaptchaopen(false);
+                    setResult(null);
+                    performLogin();
+                }, 1000);
+                return;
             }
+
+            setIsCaptchaPassed(false);
+            setResult(data.reason || "fail");
         } catch (error) {
             console.error("검증 중 오류 발생:", error);
             setResult("fail");
@@ -284,7 +297,7 @@ export default function HomePage() {
         if (!started || !videoUrl) return;
 
         // 1. 비디오 타입일 때 제어
-        if (type !== "C" && videoRef.current) {
+        if (type !== "C" && type !== "D" && videoRef.current) {
             const url = `${API}${videoUrl}`;
             videoRef.current.src = url;
             videoRef.current.load();
@@ -295,7 +308,7 @@ export default function HomePage() {
         }
 
         // 2. 이미지 타입('C')일 때 제어 (가상 타이머 구동)
-        else if (type === "C") {
+        else if (type === "C" || type === "D") {
             const virtualDuration = 5; // 5초 동안 이미지 활성화 및 CSS 애니메이션 진행
             setStartTime(Date.now());
 
@@ -330,7 +343,7 @@ export default function HomePage() {
 
     useEffect(() => {
         const video = videoRef.current;
-        if (!video || type === "C") return;
+        if (!video || type === "C" || type === "D") return;
         let raf;
 
         const update = () => {
@@ -374,7 +387,7 @@ export default function HomePage() {
 
                 let currentVerifyTime = 0;
 
-                if (type === "C") {
+                if (type === "C" || type === "D") {
                     currentVerifyTime = duration;
                     if (imgIntervalRef.current) clearInterval(imgIntervalRef.current);
                 } else {
@@ -393,6 +406,11 @@ export default function HomePage() {
 
     //영상 초기화
     const reset = () => {
+        if (loginTransitionRef.current) {
+            clearTimeout(loginTransitionRef.current);
+            loginTransitionRef.current = null;
+        }
+
         if (imgIntervalRef.current) {
             clearInterval(imgIntervalRef.current); // ⭐️ 이미지 타이머 초기화 필수
         }
@@ -422,7 +440,7 @@ export default function HomePage() {
     };
     return (
 
-        <div className="min-h-screen w-full bg-zinc-950 text-white">
+        <div className="h-[100dvh] w-full overflow-hidden bg-zinc-950 text-white flex flex-col">
             {/* Header */}
             <header className="border-b border-zinc-800 backdrop-blur">
                 <div className="max-w-7xl mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-4">
@@ -431,48 +449,14 @@ export default function HomePage() {
                     </h1>
                     <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-300">
                         {sessionUser ? (
-                            <>
-                                <span className="text-white">
-                                    {sessionUser.userid}
-                                </span>
-                                <button
-                                    type="button"
-                                    onClick={logout}
-                                    className="px-4 py-2 rounded bg-zinc-800 hover:bg-zinc-700 text-white transition"
-                                >
-                                    로그아웃
-                                </button>
-                            </>
-                        ) : (
-                            <form onSubmit={login} className="flex flex-wrap items-center gap-2">
-                                <input
-                                    type="text"
-                                    value={loginUsername}
-                                    onChange={(e) => setLoginUsername(e.target.value)}
-                                    placeholder="아이디"
-                                    className="w-32 px-3 py-2 bg-zinc-900 border border-zinc-700 rounded outline-none focus:border-purple-500 text-white"
-                                    required
-                                />
-                                <input
-                                    type="password"
-                                    value={loginPassword}
-                                    onChange={(e) => setLoginPassword(e.target.value)}
-                                    placeholder="비밀번호"
-                                    className="w-36 px-3 py-2 bg-zinc-900 border border-zinc-700 rounded outline-none focus:border-purple-500 text-white"
-                                    required
-                                />
-                                <button
-                                    type="submit"
-                                    className="px-4 py-2 rounded bg-purple-600 hover:bg-purple-500 text-white transition"
-                                >
-                                    로그인
-                                </button>
-                                <Link to="/signup" className="px-3 py-2 hover:text-white transition">
-                                    회원가입
-                                </Link>
-
-                            </form>
-                        )}
+                            <button
+                                type="button"
+                                onClick={logout}
+                                className="px-4 py-2 rounded bg-zinc-800 hover:bg-zinc-700 text-white transition"
+                            >
+                                로그아웃
+                            </button>
+                        ) : null}
                     </div>
                 </div>
             </header>
@@ -480,7 +464,7 @@ export default function HomePage() {
             {/* Hero */}
             <section
                 id="about"
-                className="max-w-7xl mx-auto px-6 pt-24 pb-20"
+                className="w-full max-w-7xl mx-auto flex flex-1 items-center px-6 py-8"
             >
                 <div className="grid lg:grid-cols-2 gap-12 items-center">
                     <div>
@@ -499,25 +483,34 @@ export default function HomePage() {
                             CAPTCHA 시스템입니다.
                         </p>
 
-                        <div className="flex gap-4">
-                            <button
-                                onClick={openVideoCaptcha}
-                                className="px-6 py-3 rounded-2xl bg-white text-black font-medium"
-                            >
-                                데모 시작
-                            </button>
-                            {captchaopen && (
-                                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-                                    <div className="bg-zinc-900 p-6 rounded-2xl w-[800px] max-w-[95vw]">
-                                        <div className="aspect-video relative overflow-hidden rounded-xl">
-                                            {type === "C" ? (
+                        {captchaopen && (
+                                <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80 p-4 backdrop-blur-sm">
+                                    <div className="w-[800px] max-w-[95vw] rounded-3xl border border-violet-400/20 bg-gradient-to-br from-violet-950/80 via-zinc-900 to-zinc-950 p-6 shadow-2xl shadow-violet-950/40">
+                                        <div className="mb-5 flex items-center justify-between">
+                                            <div>
+                                                <p className="text-sm text-violet-200/70">보안 인증</p>
+                                                <h3 className="mt-1 text-xl font-semibold text-white">CAPTCHA 챌린지</h3>
+                                            </div>
+                                            <button
+                                                onClick={() => {
+                                                    reset();
+                                                    setCaptchaopen(false);
+                                                }}
+                                                className="rounded-xl border border-violet-300/15 bg-black/20 px-4 py-2 text-sm text-violet-100 transition hover:bg-violet-400/15"
+                                            >
+                                                닫기
+                                            </button>
+                                        </div>
+
+                                        <div className="aspect-video relative overflow-hidden rounded-2xl border border-white/10 bg-zinc-950">
+                                            {type === "C" || type === "D" ? (
                                                 <div className="w-full h-full bg-zinc-900 relative flex items-center justify-center">
                                                     {started && (
                                                         <img
                                                             src={`${API}${videoUrl}`}
                                                             alt="captcha"
                                                             // 💡 ended가 되면 투명도를 주거나 필터를 먹여 '멈춤 효과' 비주얼을 제공할 수 있습니다.
-                                                            className={`w-full h-full object-cover transition-all duration-300 ${ended ? "opacity-40 filter blur-sm" : "animate-move"
+                                                            className={`w-full h-full object-cover transition-all duration-300 ${ended ? "opacity-40 filter blur-sm" : type === "C" ? "animate-move" : ""
                                                                 }`}
                                                         />)}
                                                 </div>
@@ -598,7 +591,7 @@ export default function HomePage() {
                                                             )}
 
                                                             {/* 버튼 영역 */}
-                                                            <div className="grid grid-cols-4 gap-5">
+                                                            <div className={`grid gap-5 ${type === "D" ? "grid-cols-3" : "grid-cols-4"}`}>
 
                                                                 {/* A 타입 → 1~4 */}
                                                                 {type === "A" &&
@@ -606,7 +599,7 @@ export default function HomePage() {
                                                                         <button
                                                                             key={`a-${num}`}
                                                                             onClick={() => handleAnswer(num - 1)}
-                                                                            className="bg-zinc-800/70 backdrop-blur-sm p-2 rounded text-xl"
+                                                                            className="rounded-xl border border-violet-300/15 bg-zinc-900/80 p-2 text-xl backdrop-blur-sm transition hover:bg-violet-500/50"
                                                                         >
                                                                             {num}
                                                                         </button>
@@ -619,7 +612,7 @@ export default function HomePage() {
                                                                         <button
                                                                             key={`option-${item}-${idx}`}
                                                                             onClick={() => handleAnswer(item)}
-                                                                            className="bg-zinc-800/70 backdrop-blur-sm p-2 rounded text-xl"
+                                                                            className="rounded-xl border border-violet-300/15 bg-zinc-900/80 p-2 text-xl backdrop-blur-sm transition hover:bg-violet-500/50"
                                                                         >
                                                                             {item}
                                                                         </button>
@@ -642,30 +635,29 @@ export default function HomePage() {
                                                 </div>
                                             )}
 
-                                            {/* 성공 시 다시시도 있음 */}
                                             {result && (
                                                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
-                                                    <div
-                                                        className={`text-2xl font-bold mb-4 ${result === "success"
-                                                            ? "text-green-400"
-                                                            : result === "too_fast"
-                                                                ? "text-yellow-400"
-                                                                : "text-red-400"
-                                                            }`}
-                                                    >
-                                                        {result === "success"
-                                                            ? "성공🎉"
-                                                            : result === "too_fast"
-                                                                ? "너무 빠름"
-                                                                : "실패"}
-                                                    </div>
-
-                                                    <button
-                                                        onClick={reset}
-                                                        className="px-5 py-2 bg-white text-black rounded-xl"
-                                                    >
-                                                        다시 시도
-                                                    </button>
+                                                    {result === "human" ? (
+                                                        <>
+                                                            <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-full border-4 border-green-400 text-5xl text-green-400">
+                                                                ✓
+                                                            </div>
+                                                            <div className="text-2xl font-bold text-green-400">사람입니다</div>
+                                                            <p className="mt-2 text-sm text-zinc-300">로그인 중입니다...</p>
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <div className={`mb-4 text-2xl font-bold ${result === "too_fast" ? "text-yellow-400" : "text-red-400"}`}>
+                                                                {result === "too_fast" ? "너무 빠름" : "실패"}
+                                                            </div>
+                                                            <button
+                                                                onClick={reset}
+                                                                className="rounded-xl bg-violet-500 px-5 py-2 font-medium text-white transition hover:bg-violet-400"
+                                                            >
+                                                                다시 시도
+                                                            </button>
+                                                        </>
+                                                    )}
                                                 </div>
                                             )}
 
@@ -683,7 +675,7 @@ export default function HomePage() {
 
                                                     <button
                                                         onClick={startCaptcha}
-                                                        className="px-6 py-2 bg-white text-black rounded-xl"
+                                                        className="rounded-xl bg-violet-500 px-6 py-2 font-semibold text-white shadow-lg shadow-violet-950/50 transition hover:bg-violet-400"
                                                     >
                                                         시작
                                                     </button>
@@ -692,107 +684,69 @@ export default function HomePage() {
 
                                         </div>
 
-                                        <div className="flex justify-end mt-4">
-                                            <button
-                                                onClick={() => {
-                                                    reset();
-                                                    setCaptchaopen(false);
-                                                }}
-                                                className="px-4 py-2 bg-white text-black rounded"
-                                            >
-                                                닫기
-                                            </button>
-                                        </div>
-
                                     </div>
                                 </div>
-                            )}
-                            <button className="px-6 py-3 rounded-2xl border border-zinc-700 hover:border-zinc-500 transition">
-                                자세히 보기
-                            </button>
-                        </div>
+                        )}
                     </div>
 
-                    {/* Preview Card */}
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-2xl">
-
-                        <div className="aspect-video rounded-2xl bg-zinc-800 flex items-center justify-center overflow-hidden relative">
-
-                            <div className="absolute inset-0 bg-gradient-to-br from-zinc-700/20 to-zinc-900" />
-
-                            {/* 초기 화면 */}
-
-                            <div className="w-full h-full flex justify-center relative">
-
-                                {/* 영상 */}
-                                <video
-                                    ref={videoRef}
-                                    muted
-                                    playsInline
-                                    className="w-full h-full object-cover"
-                                />
-
-                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 text-center px-6 z-20">
-                                    <div className="text-6xl mb-4">🐶</div>
-
-                                    <p className="text-lg font-medium mb-2">
-                                        영상 CAPTCHA
-                                    </p>
-
-                                    <p className="text-sm text-zinc-400 mb-4">
-                                        시연연상 넣을곳
-                                    </p>
-                                </div>
-
+                    {/* Login Card */}
+                    <div className="rounded-3xl border border-violet-400/20 bg-gradient-to-br from-violet-950/70 via-zinc-900 to-zinc-950 p-8 shadow-2xl shadow-violet-950/20 sm:p-10">
+                        {sessionUser ? (
+                            <div className="flex min-h-64 flex-col items-center justify-center text-center">
+                                <p className="mb-3 text-sm text-violet-200/70">로그인 완료</p>
+                                <h3 className="text-3xl font-semibold text-white">
+                                    {sessionUser.userid}님, 환영합니다!
+                                </h3>
+                                <p className="mt-4 text-zinc-400">Vision CAPTCHA 플랫폼을 이용할 수 있습니다.</p>
                             </div>
-                        </div>
+                        ) : isLoggingIn ? (
+                            <div className="flex min-h-64 flex-col items-center justify-center text-center">
+                                <div className="mb-4 h-10 w-10 animate-spin rounded-full border-4 border-violet-200/20 border-t-violet-300" />
+                                <p className="text-lg font-medium text-white">로그인 중입니다...</p>
+                            </div>
+                        ) : (
+                            <>
+                            <p className="mb-2 text-sm text-violet-200/70">계정으로 로그인</p>
+                            <h3 className="mb-7 text-2xl font-semibold text-white">로그인</h3>
 
-                        <div className="mt-6 flex items-center justify-between text-sm text-zinc-400">
+                            <form onSubmit={login} className="space-y-4">
+                                <label className="block">
+                                    <span className="sr-only">아이디</span>
+                                    <input
+                                        type="text"
+                                        value={loginUsername}
+                                        onChange={(e) => setLoginUsername(e.target.value)}
+                                        placeholder="아이디"
+                                        className="w-full rounded-xl border border-violet-300/15 bg-black/30 px-4 py-3 text-white outline-none placeholder:text-zinc-500 focus:border-violet-400 focus:ring-2 focus:ring-violet-400/20"
+                                        required
+                                    />
+                                </label>
+                                <label className="block">
+                                    <span className="sr-only">비밀번호</span>
+                                    <input
+                                        type="password"
+                                        value={loginPassword}
+                                        onChange={(e) => setLoginPassword(e.target.value)}
+                                        placeholder="비밀번호"
+                                        className="w-full rounded-xl border border-violet-300/15 bg-black/30 px-4 py-3 text-white outline-none placeholder:text-zinc-500 focus:border-violet-400 focus:ring-2 focus:ring-violet-400/20"
+                                        required
+                                    />
+                                </label>
+                                {loginError && <p className="text-sm text-red-400">{loginError}</p>}
+                                <button
+                                    type="submit"
+                                    className="w-full rounded-xl bg-violet-500 px-5 py-3 font-semibold text-white shadow-lg shadow-violet-950/50 transition hover:bg-violet-400"
+                                >
+                                    로그인
+                                </button>
+                            </form>
 
-                            <span>세션 기반 동적 챌린지</span>
-
-
-                            <span>위험 점수: 낮음</span>
-
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            {/* Features */}
-            <section
-                id="features"
-                className="max-w-7xl mx-auto px-6 pb-24"
-            >
-                <div className="grid md:grid-cols-3 gap-6">
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
-                        <h3 className="text-xl font-semibold mb-4">동적 DOM</h3>
-
-                        <p className="text-zinc-400 leading-relaxed text-sm">
-                            세션마다 UI 구조를 변경하여 자동화 패턴을 방해합니다.
-                        </p>
-                    </div>
-
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
-                        <h3 className="text-xl font-semibold mb-4">
-                            Vision 기반 챌린지
-                        </h3>
-
-                        <p className="text-zinc-400 leading-relaxed text-sm">
-                            객체 인식과 시간 기반 반응을 요구하는 영상 CAPTCHA
-                            시스템입니다.
-                        </p>
-                    </div>
-
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
-                        <h3 className="text-xl font-semibold mb-4">
-                            행동 패턴 분석
-                        </h3>
-
-                        <p className="text-zinc-400 leading-relaxed text-sm">
-                            사용자의 상호작용 패턴과 자동화 행동을 실시간으로
-                            분석합니다.
-                        </p>
+                            <p className="mt-5 text-center text-sm text-zinc-400">
+                                계정이 없으신가요? {" "}
+                                <Link to="/signup" className="text-violet-200 underline underline-offset-4 hover:text-white">회원가입</Link>
+                            </p>
+                            </>
+                        )}
                     </div>
                 </div>
             </section>

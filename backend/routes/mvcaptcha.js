@@ -81,6 +81,14 @@ router.get("/", async (req, res) => {
     let captchaTypes = fs.readdirSync(captchaTypeDir)
         .filter(file => fs.statSync(path.join(captchaTypeDir, file)).isDirectory());
 
+    // Set FORCE_CAPTCHA_TYPE=D locally to test only one CAPTCHA type.
+    const forcedCaptchaType = process.env.FORCE_CAPTCHA_TYPE;
+    if (forcedCaptchaType) {
+        captchaTypes = captchaTypes.filter(
+            (file) => file === `captchatype_${forcedCaptchaType}`
+        );
+    }
+
     // 💡 변수 스코프 에러 방지를 위해 확실하게 let으로 최상단 선언
     let isUserTargetLevel2 = false;
 
@@ -198,7 +206,7 @@ router.post("/video", (req, res) => {
             const data = rows[0];
             let videoUrl = "";
 
-            if (data.captchatype === "C") {
+            if (data.captchatype === "C" || data.captchatype === "D") {
                 videoUrl = `/videos/captchatype/captchatype_${data.captchatype}/img/${data.video}.png`;
             } else {
                 videoUrl = `/videos/captchatype/captchatype_${data.captchatype}/video/${data.video}.mp4`;
