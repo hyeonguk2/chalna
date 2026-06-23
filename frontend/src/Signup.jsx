@@ -190,24 +190,24 @@ export default function Signup() {
 
   return (
     <div className="min-h-screen w-full bg-zinc-950 text-white flex items-center justify-center px-4">
-      <div className="w-full max-w-md bg-zinc-900 p-8 rounded-xl border border-zinc-800">
+      <div className="w-full max-w-md rounded-3xl border border-violet-400/20 bg-gradient-to-br from-violet-950/70 via-zinc-900 to-zinc-950 p-8 shadow-2xl shadow-violet-950/20">
         <div className="mb-4">
-          <Link to="/" className="text-sm text-zinc-400 underline">
+          <Link to="/" className="text-sm text-violet-200 underline underline-offset-4 hover:text-white">
             홈으로
           </Link>
         </div>
 
-        <h1 className="text-white text-2xl mb-6 text-center">회원가입</h1>
+        <h1 className="mb-6 text-center text-2xl text-white">회원가입</h1>
 
         <input
-          className="w-full mb-3 p-3 bg-zinc-800 rounded"
+          className="mb-3 w-full rounded-xl border border-violet-300/15 bg-black/30 p-3 text-white outline-none placeholder:text-zinc-500 focus:border-violet-400 focus:ring-2 focus:ring-violet-400/20"
           placeholder="아이디"
           value={userid}
           onChange={(e) => setUserid(e.target.value)}
         />
 
         <input
-          className="w-full mb-3 p-3 bg-zinc-800 rounded"
+          className="mb-3 w-full rounded-xl border border-violet-300/15 bg-black/30 p-3 text-white outline-none placeholder:text-zinc-500 focus:border-violet-400 focus:ring-2 focus:ring-violet-400/20"
           placeholder="비밀번호"
           type="password"
           value={password}
@@ -215,7 +215,7 @@ export default function Signup() {
         />
 
         <input
-          className="w-full mb-3 p-3 bg-zinc-800 rounded"
+          className="mb-3 w-full rounded-xl border border-violet-300/15 bg-black/30 p-3 text-white outline-none placeholder:text-zinc-500 focus:border-violet-400 focus:ring-2 focus:ring-violet-400/20"
           placeholder="이메일"
           value={email}
           onChange={handleEmailChange}
@@ -225,10 +225,10 @@ export default function Signup() {
           <button
             onClick={sendCode}
             disabled={!email || !isValidEmail(email) || sendingCode || (codeSent && resendTimeLeft > 0)}
-            className={`w-full mb-3 py-2 rounded ${
+            className={`w-full mb-3 py-2 rounded-xl ${
               email && isValidEmail(email) && !sendingCode && (!codeSent || resendTimeLeft <= 0)
-                ? "bg-blue-600"
-                : "bg-gray-600 cursor-not-allowed"
+                ? "bg-violet-500 text-white hover:bg-violet-400"
+                : "bg-zinc-700 text-zinc-400 cursor-not-allowed"
             }`}
           >
             {sendingCode
@@ -244,7 +244,7 @@ export default function Signup() {
         {codeSent && !verified && (
           <div className="mb-3 relative">
             <input
-              className="w-full p-3 pr-16 bg-zinc-800 rounded"
+              className="w-full rounded-xl border border-violet-300/15 bg-black/30 p-3 pr-16 text-white outline-none placeholder:text-zinc-500 focus:border-violet-400 focus:ring-2 focus:ring-violet-400/20"
               placeholder="인증번호"
               value={code}
               onChange={(e) => setCode(e.target.value)}
@@ -260,7 +260,7 @@ export default function Signup() {
           <button
             onClick={verifyCode}
             disabled={checkingCode}
-            className="w-full bg-green-600 py-2 rounded mb-3 disabled:bg-gray-600 disabled:cursor-not-allowed"
+            className="mb-3 w-full rounded-xl bg-violet-500 py-2 text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
           >
             {checkingCode ? "확인 중..." : "확인"}
           </button>
@@ -273,7 +273,7 @@ export default function Signup() {
         <button
           onClick={handleSignup}
           disabled={signingUp}
-          className="w-full bg-purple-600 py-3 rounded disabled:bg-gray-600 disabled:cursor-not-allowed"
+          className="w-full rounded-xl bg-violet-500 py-3 font-semibold text-white shadow-lg shadow-violet-950/50 hover:bg-violet-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
         >
           {signingUp ? "가입 중..." : "가입하기"}
         </button>
