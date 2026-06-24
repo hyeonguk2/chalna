@@ -113,12 +113,15 @@ const calculateLinearRegression = (xCoords, yCoords) => {
 // ==========================================
 const analyzeBotBehavior = (metrics) => {
     let botScore = 0;
+    let linearMse = null;
+    let mouseReason = "정상 흔들림";
 
     // --- [1] 마우스 궤적 선형성 분석 (배점 60점) ---
     const traj = metrics.mouseTrajectory || [];
 
     if (traj.length < 5) {
         botScore += 60;
+        mouseReason = "궤적 부족";
     } else {
         const xCoords = traj.map(pt => pt.x);
         const yCoords = traj.map(pt => pt.y);
@@ -126,6 +129,7 @@ const analyzeBotBehavior = (metrics) => {
 
         if (xStdDev === 0) {
             botScore += 60;
+            mouseReason = "수직 고정 궤적";
         } else {
             const { slope, intercept } = calculateLinearRegression(xCoords, yCoords);
 
@@ -135,9 +139,11 @@ const analyzeBotBehavior = (metrics) => {
                 squaredErrorsSum += Math.pow(yCoords[i] - predictedY, 2);
             }
             const mse = squaredErrorsSum / traj.length;
+            linearMse = Number.isFinite(mse) ? mse : null;
 
-            if (mse < 2.0) {
+            if (linearMse !== null && linearMse < 2.0) {
                 botScore += 60;
+                mouseReason = "선형 궤적";
             }
         }
     }
@@ -159,6 +165,7 @@ const analyzeBotBehavior = (metrics) => {
         const stdDev = calculateStdDev(holdTimes);
         if (stdDev < 1.0) {
             botScore += 40;
+            mouseReason = mouseReason === "정상 흔들림" ? "클릭 간격 일정" : `${mouseReason}, 클릭 일정`;
         }
     } else {
         botScore += 20;
@@ -166,7 +173,15 @@ const analyzeBotBehavior = (metrics) => {
 
     console.log(`[Bot Detection] 트래킹 수: ${traj.length}, 클릭 쌍: ${holdTimes.length} -> 산출된 위험 점수: ${botScore}`);
 
-    return botScore >= 60;
+    return {
+        isBot: botScore >= 60,
+        botScore,
+        mouseReason,
+        trajectoryPoints: traj.length,
+        linearMse,
+        clickHoldStd: holdTimes.length > 0 ? calculateStdDev(holdTimes) : null,
+        clickPairs: holdTimes.length,
+    };
 };
 
 // ==========================================
@@ -175,6 +190,106 @@ const analyzeBotBehavior = (metrics) => {
 // 외부에서 db 객체를 주입받도록 module.exports를 함수형태로 변경합니다.
 module.exports = (db) => {
     const router = express.Router();
+
+    const query = (sql, values = []) =>
+        new Promise((resolve, reject) => {
+            db.query(sql, values, (err, results) => {
+                if (err) return reject(err);
+                resolve(results);
+            });
+        });
+
+    const ensureSecurityEventsTable = () => {
+        const createTable = `
+            CREATE TABLE IF NOT EXISTS security_events (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                phase ENUM('captcha','login') NOT NULL,
+                userid VARCHAR(50),
+                captcha_type CHAR(1),
+                captcha_level INT,
+                captcha_result VARCHAR(30),
+                mouse_result VARCHAR(80),
+                bot_score INT DEFAULT 0,
+                trajectory_points INT DEFAULT 0,
+                linear_mse DOUBLE,
+                click_hold_std DOUBLE,
+                click_pairs INT DEFAULT 0,
+                click_time DOUBLE,
+                badtime DOUBLE,
+                result VARCHAR(30) NOT NULL,
+                message VARCHAR(255),
+                created_at BIGINT NOT NULL,
+                INDEX idx_security_created_at (created_at),
+                INDEX idx_security_userid (userid),
+                INDEX idx_security_phase (phase)
+            )
+        `;
+
+        db.query(createTable, (err) => {
+            if (err) {
+                console.error("security_events table create error:", err);
+                return;
+            }
+
+            console.log("security_events table ready");
+        });
+    };
+
+    ensureSecurityEventsTable();
+
+    const recordSecurityEvent = (event) => {
+        const sql = `
+            INSERT INTO security_events (
+                phase, userid, captcha_type, captcha_level, captcha_result,
+                mouse_result, bot_score, trajectory_points, linear_mse,
+                click_hold_std, click_pairs, click_time, badtime, result,
+                message, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+
+        const values = [
+            event.phase,
+            event.userid || null,
+            event.captchaType || null,
+            event.captchaLevel || null,
+            event.captchaResult || null,
+            event.mouseResult || null,
+            event.botScore || 0,
+            event.trajectoryPoints || 0,
+            event.linearMse ?? null,
+            event.clickHoldStd ?? null,
+            event.clickPairs || 0,
+            event.clickTime ?? null,
+            event.badtime ?? null,
+            event.result,
+            event.message || null,
+            Date.now(),
+        ];
+
+        db.query(sql, values, (err) => {
+            if (err) console.error("security event insert error:", err);
+        });
+    };
+
+    const getStatusLabel = (row) => {
+        if (row.result === "blocked" || row.result === "bot") return "차단";
+        if (row.result === "success") return "정상";
+        if (row.result === "retry") return "재시도";
+        return "이상";
+    };
+
+    const formatTime = (createdAt) => {
+        const date = new Date(Number(createdAt));
+        if (Number.isNaN(date.getTime())) return "-";
+        return date.toLocaleTimeString("ko-KR", { hour12: false });
+    };
+
+    const getCaptchaLevel = (captchaType) => captchaType === "D" ? 2 : 1;
+
+    const countCaptchaResults = (items) => ({
+        pass: items.filter((event) => event.captcha_result === "success").length,
+        fail: items.filter((event) => event.captcha_result && event.captcha_result !== "success").length,
+    });
 
     router.post("/api/login", (req, res) => {
         try {
@@ -255,6 +370,15 @@ module.exports = (db) => {
                             );
                         });
 
+                        recordSecurityEvent({
+                            phase: "login",
+                            userid: payload.username,
+                            captchaType: payload.captchaData?.type,
+                            captchaResult: payload.captchaData?.answer === true ? "success" : "missing",
+                            result: "fail",
+                            message: "아이디 또는 비밀번호 불일치",
+                        });
+
                         return res.status(401).json({ success: false, isBot: false, message: "아이디 또는 비밀번호가 일치하지 않습니다." });
                     }
 
@@ -277,6 +401,15 @@ module.exports = (db) => {
                     }
 
                     if (!payload.captchaData || payload.captchaData.answer !== true) {
+                        recordSecurityEvent({
+                            phase: "login",
+                            userid: payload.username,
+                            captchaType: payload.captchaData?.type,
+                            captchaResult: "missing",
+                            result: "fail",
+                            message: "CAPTCHA 미완료",
+                        });
+
                         return res.status(401).json({
                             success: false,
                             isBot: false,
@@ -284,7 +417,8 @@ module.exports = (db) => {
                         });
                     }
                     // (4) 핵심 로직: 마우스 행동 기반 봇 분석 수행
-                    const isBot = analyzeBotBehavior(payload.behaviorMetrics || {});
+                    const behaviorAnalysis = analyzeBotBehavior(payload.behaviorMetrics || {});
+                    const isBot = behaviorAnalysis.isBot;
 
                     // 🤖 [봇 감지 시 처리] 봇으로 판정되면 실패 횟수를 누적하고 차단 검사 진행
                     if (isBot) {
@@ -297,6 +431,22 @@ module.exports = (db) => {
                                 "UPDATE users SET login_attempts = login_attempts + 1, lockout_time = ? WHERE userid = ?",
                                 [now, payload.username]
                             );
+                        });
+
+                        recordSecurityEvent({
+                            phase: "login",
+                            userid: payload.username,
+                            captchaType: payload.captchaData?.type,
+                            captchaLevel: payload.captchaData?.level,
+                            captchaResult: "success",
+                            mouseResult: behaviorAnalysis.mouseReason,
+                            botScore: behaviorAnalysis.botScore,
+                            trajectoryPoints: behaviorAnalysis.trajectoryPoints,
+                            linearMse: behaviorAnalysis.linearMse,
+                            clickHoldStd: behaviorAnalysis.clickHoldStd,
+                            clickPairs: behaviorAnalysis.clickPairs,
+                            result: "bot",
+                            message: "비정상 패턴 감지",
                         });
 
                         return res.json({ success: true, isBot: true, message: "비정상 패턴 감지" });
@@ -314,6 +464,22 @@ module.exports = (db) => {
 
                     // 로그인 최종 성공 시 유저 테이블의 실패 횟수 및 락아웃 리셋
                     db.query("UPDATE users SET login_attempts = 0, lockout_time = 0, captchatype = NULL WHERE userid = ?", [payload.username]);
+
+                    recordSecurityEvent({
+                        phase: "login",
+                        userid: payload.username,
+                        captchaType: payload.captchaData?.type,
+                        captchaLevel: payload.captchaData?.level,
+                        captchaResult: "success",
+                        mouseResult: behaviorAnalysis.mouseReason,
+                        botScore: behaviorAnalysis.botScore,
+                        trajectoryPoints: behaviorAnalysis.trajectoryPoints,
+                        linearMse: behaviorAnalysis.linearMse,
+                        clickHoldStd: behaviorAnalysis.clickHoldStd,
+                        clickPairs: behaviorAnalysis.clickPairs,
+                        result: "success",
+                        message: "로그인 및 인증 성공",
+                    });
 
                     return res.json({ success: true, isBot: false, message: "로그인 및 인증 성공" });
                 });
@@ -354,6 +520,110 @@ module.exports = (db) => {
 
         clearSessionCookie(res);
         return res.json({ success: true });
+    });
+
+    router.get("/api/dashboard/security", async (req, res) => {
+        try {
+            const since = Date.now() - 24 * 60 * 60 * 1000;
+            const events = await query(
+                `SELECT * FROM security_events
+                 WHERE created_at >= ?
+                 ORDER BY created_at DESC
+                 LIMIT 200`,
+                [since]
+            );
+
+            const total = events.length;
+            const captchaEvents = events.filter((event) => event.phase === "captcha");
+            const loginEvents = events.filter((event) => event.phase === "login");
+            const captchaPassed = captchaEvents.filter((event) => event.captcha_result === "success").length;
+            const captchaPassRate = captchaEvents.length > 0
+                ? Math.round((captchaPassed / captchaEvents.length) * 1000) / 10
+                : 0;
+            const mouseAnomalies = loginEvents.filter((event) => Number(event.bot_score) >= 60).length;
+            const blocked = events.filter((event) => ["blocked", "bot"].includes(event.result)).length;
+
+            const captchaTypes = ["A", "B", "C", "D"].map((type) => {
+                const byType = captchaEvents.filter((event) => event.captcha_type === type);
+                return {
+                    type,
+                    level: getCaptchaLevel(type),
+                    ...countCaptchaResults(byType),
+                };
+            });
+
+            const captchaLevels = [
+                {
+                    level: 1,
+                    label: "Level 1",
+                    types: ["A", "B", "C"],
+                    ...countCaptchaResults(captchaEvents.filter((event) => ["A", "B", "C"].includes(event.captcha_type))),
+                },
+                {
+                    level: 2,
+                    label: "Level 2",
+                    types: ["D"],
+                    ...countCaptchaResults(captchaEvents.filter((event) => event.captcha_type === "D")),
+                },
+            ];
+
+            const recentLogins = loginEvents.slice(0, 12);
+            const riskTrend = [...recentLogins]
+                .reverse()
+                .map((event) => Number(event.bot_score) || 0);
+
+            while (riskTrend.length < 12) {
+                riskTrend.unshift(0);
+            }
+
+            const latestLogin = loginEvents[0] || {};
+            const recentRows = events.slice(0, 12).map((event) => ({
+                id: `EV-${event.id}`,
+                user: event.userid || "-",
+                captcha: event.captcha_type || "-",
+                captchaLevel: event.captcha_type ? getCaptchaLevel(event.captcha_type) : "-",
+                mouse: event.mouse_result || (event.phase === "captcha" ? "CAPTCHA 판정" : "-"),
+                botScore: Number(event.bot_score) || 0,
+                result: getStatusLabel(event),
+                time: formatTime(event.created_at),
+            }));
+
+            const mousePoints = latestLogin.trajectory_points > 0
+                ? Array.from({ length: Math.min(Number(latestLogin.trajectory_points), 10) }, (_, index) => {
+                    const x = 6 + index * 9.8;
+                    const baseY = 78 - index * 6;
+                    const wobble = (Number(latestLogin.linear_mse) || 0) > 2 ? Math.sin(index) * 8 : 0;
+                    return [Math.round(x), Math.max(12, Math.round(baseY + wobble))];
+                })
+                : [];
+
+            res.json({
+                summary: {
+                    totalAttempts: total,
+                    captchaPassRate,
+                    mouseAnomalies,
+                    blocked,
+                },
+                captchaTypes,
+                captchaLevels,
+                riskTrend,
+                recentRows,
+                mousePoints,
+                latestMetrics: {
+                    trajectoryPoints: Number(latestLogin.trajectory_points) || 0,
+                    linearMse: latestLogin.linear_mse === null || latestLogin.linear_mse === undefined
+                        ? null
+                        : Number(latestLogin.linear_mse),
+                    clickHoldStd: latestLogin.click_hold_std === null || latestLogin.click_hold_std === undefined
+                        ? null
+                        : Number(latestLogin.click_hold_std),
+                    botScore: Number(latestLogin.bot_score) || 0,
+                },
+            });
+        } catch (error) {
+            console.error("dashboard security api error:", error);
+            res.status(500).json({ message: "대시보드 데이터를 불러오지 못했습니다." });
+        }
     });
 
     return router;

@@ -47,7 +47,76 @@ db.connect((err) => {
         }
         console.log("captcha table ready");
     });
+
+    const createSecurityEventsTable = `
+        CREATE TABLE IF NOT EXISTS security_events (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            phase ENUM('captcha','login') NOT NULL,
+            userid VARCHAR(50),
+            captcha_type CHAR(1),
+            captcha_level INT,
+            captcha_result VARCHAR(30),
+            mouse_result VARCHAR(80),
+            bot_score INT DEFAULT 0,
+            trajectory_points INT DEFAULT 0,
+            linear_mse DOUBLE,
+            click_hold_std DOUBLE,
+            click_pairs INT DEFAULT 0,
+            click_time DOUBLE,
+            badtime DOUBLE,
+            result VARCHAR(30) NOT NULL,
+            message VARCHAR(255),
+            created_at BIGINT NOT NULL,
+            INDEX idx_security_created_at (created_at),
+            INDEX idx_security_userid (userid),
+            INDEX idx_security_phase (phase)
+        )
+    `;
+
+    db.query(createSecurityEventsTable, (err) => {
+        if (err) {
+            console.log("security events table create error:", err);
+            return;
+        }
+        console.log("security_events table ready");
+    });
 });
+
+function recordCaptchaSecurityEvent(event) {
+    const sql = `
+        INSERT INTO security_events (
+            phase, userid, captcha_type, captcha_level, captcha_result,
+            mouse_result, bot_score, trajectory_points, linear_mse,
+            click_hold_std, click_pairs, click_time, badtime, result,
+            message, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    db.query(
+        sql,
+        [
+            "captcha",
+            event.userId || null,
+            event.captchaType || null,
+            event.captchaLevel || null,
+            event.captchaResult,
+            null,
+            0,
+            0,
+            null,
+            null,
+            0,
+            event.clickTime ?? null,
+            event.badtime ?? null,
+            event.result,
+            event.message || null,
+            Date.now(),
+        ],
+        (err) => {
+            if (err) console.error("captcha security event insert error:", err);
+        }
+    );
+}
 
 // =========================
 // 랜덤 값 생성
@@ -267,6 +336,16 @@ router.post("/verify", (req, res) => {
                         [type, now, userId]
                     );
                 });
+                recordCaptchaSecurityEvent({
+                    userId,
+                    captchaType: data.captchatype,
+                    captchaLevel: currentCaptchaLevel,
+                    captchaResult: "too_fast",
+                    clickTime: clickTimeNum,
+                    badtime: badtimeNum,
+                    result: currentCaptchaLevel === 2 ? "fail" : "retry",
+                    message: "CAPTCHA too fast",
+                });
                 return res.json({ ok: false, reason: "too_fast" });
             }
             // 조건 2: badtime ~ badtime + 0.5초 사이에 정확히 누른 경우 ⭕ (Level 2 성공)
@@ -276,8 +355,19 @@ router.post("/verify", (req, res) => {
 
             // 2. 캡차 결과에 따른 사용자 실패 횟수 후처리
             if (String(answer) === data.answer) {
+                const captchaSuccessEvent = {
+                    userId,
+                    captchaType: data.captchatype,
+                    captchaLevel: currentCaptchaLevel,
+                    captchaResult: "success",
+                    clickTime: clickTimeNum,
+                    badtime: badtimeNum,
+                    result: "success",
+                    message: "CAPTCHA success",
+                };
                 // 캡차 정답 ⭕ : 해당 유저의 로그인 실패 횟수를 0으로 초기화
                 if (currentCaptchaLevel === 2) {
+                    recordCaptchaSecurityEvent(captchaSuccessEvent);
                     db.query(
                         "UPDATE users SET login_attempts = 2, captchatype = NULL WHERE userid = ?",
                         [userId],
@@ -289,6 +379,12 @@ router.post("/verify", (req, res) => {
                 }
                 // 만약 [레벨 1 문제]에서 0.5초 타이밍 조절을 성공하여 레벨 2 진입 자격을 딴 경우
                 else if (isLevel2Match) {
+                    recordCaptchaSecurityEvent({
+                        ...captchaSuccessEvent,
+                        captchaResult: "level2_unlocked",
+                        result: "retry",
+                        message: "CAPTCHA level 2 unlocked",
+                    });
                     // 유저의 상태 플래그값을 변경하여 다음 GET 요청 시 레벨 2 문제를 강제 배정하도록 유도
                     db.query(
                         "UPDATE users SET login_attempts = -222, captchatype = NULL WHERE userid = ?",
@@ -303,6 +399,7 @@ router.post("/verify", (req, res) => {
                 }
                 // 일반 성공 처리 (시간 초과 상태로 글자만 맞춤) -> 기획에 따라 실패 처리 혹은 재시도 유도 가능
                 else {
+                    recordCaptchaSecurityEvent(captchaSuccessEvent);
                     db.query(
                         "UPDATE users SET login_attempts = 0, captchatype = NULL WHERE userid = ?",
                         [userId],
@@ -313,7 +410,19 @@ router.post("/verify", (req, res) => {
                     );
                 }
             } else {
+                const captchaFailEvent = {
+                    userId,
+                    captchaType: data.captchatype,
+                    captchaLevel: currentCaptchaLevel,
+                    captchaResult: "fail",
+                    clickTime: clickTimeNum,
+                    badtime: badtimeNum,
+                    result: currentCaptchaLevel === 2 ? "fail" : "retry",
+                    message: "CAPTCHA fail",
+                };
+
                 if (currentCaptchaLevel === 2) {
+                    recordCaptchaSecurityEvent(captchaFailEvent);
                     // 🎯 [추가] 레벨 2 문제를 틀린 경우 실패 횟수를 0으로 초기화 (최종 실패 처리 후 리셋 등)
                     db.query(
                         "UPDATE users SET login_attempts = 0, captchatype = NULL WHERE userid = ?",
@@ -324,6 +433,7 @@ router.post("/verify", (req, res) => {
                         }
                     );
                 } else {
+                    recordCaptchaSecurityEvent(captchaFailEvent);
                     // 레벨 1 문제를 틀린 경우 실패 횟수 증가 및 2회 도달 시 락아웃 처리
                     db.query("SELECT login_attempts FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
                         const currentAttempts = userRows[0]?.login_attempts || 0;

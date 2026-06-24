@@ -26,6 +26,7 @@ export default function HomePage() {
     const [badtime, setBadTime] = useState(null); // 찍기 및 빠른 클릭 차단
     const [type, setType] = useState(null); // 영상 타입
     const [duration, setDuration] = useState(0);
+    const [captchaLevel, setCaptchaLevel] = useState(null);
     // ⭐️ [추가] 캡차 성공 여부를 기록할 상태 변수
     const [isCaptchaPassed, setIsCaptchaPassed] = useState(false);
 
@@ -98,7 +99,10 @@ export default function HomePage() {
             clickData: []
             },
             captchaData: {
-                answer: true
+                answer: true,
+                type,
+                level: captchaLevel,
+                captchaId
             }
         };
 
@@ -193,6 +197,7 @@ export default function HomePage() {
         setOptions(data.options);   // ★ 중요
         setBadTime(data.badtime);
         setType(data.type);
+        setCaptchaLevel(data.currentLevel || null);
         if (data.type === "C" || data.type === "D") {
             setDuration(5);
         }
@@ -431,6 +436,7 @@ export default function HomePage() {
         setStartTime(null);
         setProgress(0);
         setBadTime(Infinity);
+        setCaptchaLevel(null);
         setEndedTime(null);
         setRemainTime(0);
         setEnded(false);
@@ -449,13 +455,21 @@ export default function HomePage() {
                     </h1>
                     <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-300">
                         {sessionUser ? (
-                            <button
-                                type="button"
-                                onClick={logout}
-                                className="px-4 py-2 rounded bg-zinc-800 hover:bg-zinc-700 text-white transition"
-                            >
-                                로그아웃
-                            </button>
+                            <>
+                                <Link
+                                    to="/dashboard"
+                                    className="px-4 py-2 rounded border border-violet-300/20 bg-violet-500/10 text-violet-100 transition hover:bg-violet-500/20"
+                                >
+                                    대시보드
+                                </Link>
+                                <button
+                                    type="button"
+                                    onClick={logout}
+                                    className="px-4 py-2 rounded bg-zinc-800 hover:bg-zinc-700 text-white transition"
+                                >
+                                    로그아웃
+                                </button>
+                            </>
                         ) : null}
                     </div>
                 </div>
