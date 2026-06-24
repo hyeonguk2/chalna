@@ -549,11 +549,16 @@ router.post("/verify", async (req, res) => {
                         [Date.now(), userId],
                         (updateErr) => {
                             if (updateErr) console.error("레벨 2 오답 후 초기화 실패:", updateErr);
-                            return res.json({ ok: false, reason: "aborted", level2_fail: true });
+                            return res.json({
+                                ok: false,
+                                reason: "aborted",
+                                level2_fail: true,
+                                locked: true
+                            });
                         }
                     );
                 } else {
-                    db.query("SELECT login_attempts FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
+                    db.query("SELECT login_attempts, lockout_count FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
                         const currentAttempts = Math.max(0, Number(userRows[0]?.login_attempts || 0));
                         const nextAttempts = currentAttempts + 1;
                         const now = nextAttempts >= 2 ? Date.now() : 0;
@@ -567,7 +572,12 @@ router.post("/verify", async (req, res) => {
                                     console.error(updateErr);
                                     return res.status(500).json({ ok: false, reason: "db_error" });
                                 }
-                                return res.json({ ok: false, reason: "aborted" });
+                                return res.json({
+                                    ok: false,
+                                    reason: "aborted",
+                                    locked: nextAttempts >= 2,
+                                    remainingSec: nextAttempts >= 2 ? Math.ceil(getLockoutDuration(Math.max(1, Number(userRows[0]?.lockout_count || 0) + lockoutIncrement)) / 1000) : undefined
+                                });
                             }
                         );
                     });
@@ -597,7 +607,7 @@ router.post("/verify", async (req, res) => {
                     badtime: badtimeNum,
                 }));
                 if (isDStage) {
-                    db.query("SELECT login_attempts FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
+                    db.query("SELECT login_attempts, lockout_count FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
                         const currentAttempts = Math.max(1, Number(userRows[0]?.login_attempts || 0));
                         const nextAttempts = currentAttempts + 1;
                         const now = nextAttempts >= 2 ? Date.now() : 0;
@@ -611,14 +621,19 @@ router.post("/verify", async (req, res) => {
                                     console.error(updateErr);
                                     return res.status(500).json({ ok: false, reason: "db_error" });
                                 }
-                                return res.json({ ok: false, reason: "too_fast", level2_fail: true });
+                                return res.json({
+                                    ok: false,
+                                    reason: "too_fast",
+                                    level2_fail: true,
+                                    locked: true
+                                });
                             }
                         );
                     });
                     return;
                 }
 
-                db.query("SELECT login_attempts FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
+                db.query("SELECT login_attempts, lockout_count FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
                     const currentAttempts = Math.max(0, Number(userRows[0]?.login_attempts || 0));
                     const nextAttempts = currentAttempts + 1;
                     const now = nextAttempts >= 2 ? Date.now() : 0;
@@ -626,10 +641,22 @@ router.post("/verify", async (req, res) => {
 
                     db.query(
                         "UPDATE users SET login_attempts = ?, captchatype = ?, captcha_level = 1, lockout_time = ?, lockout_count = COALESCE(lockout_count, 0) + ? WHERE userid = ?",
-                        [nextAttempts, data.captchatype, now, lockoutIncrement, userId]
+                        [nextAttempts, data.captchatype, now, lockoutIncrement, userId],
+                        (updateErr) => {
+                            if (updateErr) {
+                                console.error(updateErr);
+                                return res.status(500).json({ ok: false, reason: "db_error" });
+                            }
+                            return res.json({
+                                ok: false,
+                                reason: "too_fast",
+                                locked: nextAttempts >= 2,
+                                remainingSec: nextAttempts >= 2 ? Math.ceil(getLockoutDuration(Math.max(1, Number(userRows[0]?.lockout_count || 0) + lockoutIncrement)) / 1000) : undefined
+                            });
+                        }
                     );
                 });
-                return res.json({ ok: false, reason: "too_fast" });
+                return;
             }
 
             
@@ -712,12 +739,17 @@ router.post("/verify", async (req, res) => {
                         [Date.now(), userId],
                         (updateErr) => {
                             if (updateErr) console.error("레벨 2 오답 후 초기화 실패:", updateErr);
-                            return res.json({ ok: false, reason: failReason, level2_fail: true });
+                            return res.json({
+                                ok: false,
+                                reason: failReason,
+                                level2_fail: true,
+                                locked: true
+                            });
                         }
                     );
                 } else {
 
-                    db.query("SELECT login_attempts FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
+                    db.query("SELECT login_attempts, lockout_count FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
                         const currentAttempts = Math.max(0, Number(userRows[0]?.login_attempts || 0));
                         const nextAttempts = currentAttempts + 1;
                         const now = nextAttempts >= 2 ? Date.now() : 0;
@@ -731,7 +763,12 @@ router.post("/verify", async (req, res) => {
                                     console.error(updateErr);
                                     return res.status(500).json({ ok: false, reason: "db_error" });
                                 }
-                                return res.json({ ok: false, reason: failReason });
+                                return res.json({
+                                    ok: false,
+                                    reason: failReason,
+                                    locked: nextAttempts >= 2,
+                                    remainingSec: nextAttempts >= 2 ? Math.ceil(getLockoutDuration(Math.max(1, Number(userRows[0]?.lockout_count || 0) + lockoutIncrement)) / 1000) : undefined
+                                });
                             }
                         );
                     });

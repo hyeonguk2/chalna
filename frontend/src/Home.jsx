@@ -340,6 +340,9 @@ export default function HomePage() {
     };
 
     const submitCaptcha = async (t, answer) => {
+        if (isSubmittingRef.current) return;
+        isSubmittingRef.current = true;
+
 
         if (imgIntervalRef.current) {
             clearInterval(imgIntervalRef.current);
@@ -373,6 +376,16 @@ export default function HomePage() {
 
             const data = await res.json();
 
+            if (data.locked) {
+                reset();
+                setCaptchaopen(false);
+                const retryMessage = data.remainingSec
+                    ? `${data.remainingSec}초 후 다시 시도하세요.`
+                    : "잠시 후 다시 시도하세요.";
+                alert(`CAPTCHA 인증에 2회 실패했습니다. ${retryMessage}`);
+                return;
+            }
+
             if (data.goToLevel2 || data.reason === "d_stage_unlocked") {
                 setIsCaptchaPassed(false);
                 setCaptchaToken("");
@@ -404,6 +417,8 @@ export default function HomePage() {
         } catch (error) {
             console.error("검증 중 오류 발생:", error);
             setResult("fail");
+        } finally {
+            isSubmittingRef.current = false;
         }
     };
 
@@ -606,6 +621,7 @@ export default function HomePage() {
         setFinalSolveTime(null);
         setCaptchaToken("");
         setChallengeToken("");
+        isSubmittingRef.current = false;
 
     };
     return (
