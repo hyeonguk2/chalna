@@ -217,6 +217,69 @@ const analyzeBotBehavior = (metrics) => {
 module.exports = (db) => {
     const router = express.Router();
 
+    router.post("/api/login-precheck", async (req, res) => {
+        const { username, password } = req.body;
+
+        if (!username || !password) {
+            return res.status(400).json({ valid: false, message: "Username and password are required." });
+        }
+
+        const rateLimitAllowed = await recordRateLimit(
+            getLoginRateLimitKey(req.ip, `precheck:${username}`),
+            LOGIN_RATE_LIMIT_MAX,
+            LOGIN_RATE_LIMIT_WINDOW_SECONDS
+        ).catch(() => false);
+
+        if (!rateLimitAllowed) {
+            return res.status(429).json({ valid: false, message: "Too many requests. Please try again shortly." });
+        }
+
+        db.query(
+            "SELECT userid, password, login_attempts, lockout_time, lockout_count FROM users WHERE userid = ?",
+            [username],
+            async (err, rows) => {
+                if (err) {
+                    console.error("Login precheck query error:", err);
+                    return res.status(500).json({ valid: false, message: "Unable to verify credentials." });
+                }
+
+                const user = rows[0];
+                let passwordMatches = false;
+
+                try {
+                    passwordMatches = user && (
+                        user.password.startsWith("$2")
+                            ? await bcrypt.compare(password, user.password)
+                            : password === user.password
+                    );
+                } catch (passwordError) {
+                    console.error("Login precheck password error:", passwordError);
+                    return res.status(500).json({ valid: false, message: "Unable to verify credentials." });
+                }
+
+                if (!passwordMatches) {
+                    return res.status(401).json({ valid: false, message: "Invalid username or password." });
+                }
+
+                if (Number(user.login_attempts || 0) >= 2 && Number(user.lockout_time || 0) > 0) {
+                    const lockoutDuration = getLockoutDuration(Math.max(1, Number(user.lockout_count || 1)));
+                    const remainingMs = lockoutDuration - (Date.now() - Number(user.lockout_time));
+
+                    if (remainingMs > 0) {
+                        return res.json({
+                            valid: false,
+                            locked: true,
+                            remainingSec: Math.ceil(remainingMs / 1000),
+                            message: `Login is temporarily locked. Try again in ${Math.ceil(remainingMs / 1000)} seconds.`
+                        });
+                    }
+                }
+
+                return res.json({ valid: true });
+            }
+        );
+    });
+
     router.post("/api/login", async (req, res) => {
         try {
             const payload = req.body;
