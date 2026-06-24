@@ -23,6 +23,7 @@ export default function HomePage() {
     const [progress, setProgress] = useState(0);
     const imgIntervalRef = useRef(null);
     const loginTransitionRef = useRef(null);
+    const isSubmittingRef = useRef(false);
     const behaviorMetricsRef = useRef({
         mouseTrajectory: [],
         clickData: []
@@ -41,12 +42,11 @@ export default function HomePage() {
     const [isCaptchaPassed, setIsCaptchaPassed] = useState(false);
     const [captchaToken, setCaptchaToken] = useState("");
     const [challengeToken, setChallengeToken] = useState("");
+    const [isSubmittingCaptcha, setIsSubmittingCaptcha] = useState(false);
 
     const [sessionUser, setSessionUser] = useState(null);
     const [loginUsername, setLoginUsername] = useState("");
     const [loginPassword, setLoginPassword] = useState("");
-    const [mouseTrajectory, setMouseTrajectory] = useState([]);
-    const [clickData, setClickData] = useState([]);
     const [loginError, setLoginError] = useState("");
     const [isLoggingIn, setIsLoggingIn] = useState(false);
 
@@ -56,8 +56,6 @@ export default function HomePage() {
             mouseTrajectory: [],
             clickData: []
         };
-        setMouseTrajectory([]);
-        setClickData([]);
     };
 
     useEffect(() => {
@@ -91,50 +89,38 @@ export default function HomePage() {
         const handleMouseMove = (event) => {
             const now = Date.now();
             if (now - lastLoggedTime > 30) {
-                setMouseTrajectory((prev) => {
-                    const next = [
-                        ...prev.slice(-(MAX_TRAJECTORY_POINTS - 1)),
-                        {
-                            x: event.clientX,
-                            y: event.clientY,
-                            t: now
-                        }
-                    ];
-                    behaviorMetricsRef.current.mouseTrajectory = next;
-                    return next;
-                });
+                behaviorMetricsRef.current.mouseTrajectory = [
+                    ...behaviorMetricsRef.current.mouseTrajectory.slice(-(MAX_TRAJECTORY_POINTS - 1)),
+                    {
+                        x: event.clientX,
+                        y: event.clientY,
+                        t: now
+                    }
+                ];
                 lastLoggedTime = now;
             }
         };
         const handleMouseDown = (event) => {
-            setClickData((prev) => {
-                const next = [
-                    ...prev.slice(-(MAX_CLICK_EVENTS - 1)),
-                    {
-                        type: "down",
-                        x: event.clientX,
-                        y: event.clientY,
-                        t: Date.now()
-                    }
-                ];
-                behaviorMetricsRef.current.clickData = next;
-                return next;
-            });
+            behaviorMetricsRef.current.clickData = [
+                ...behaviorMetricsRef.current.clickData.slice(-(MAX_CLICK_EVENTS - 1)),
+                {
+                    type: "down",
+                    x: event.clientX,
+                    y: event.clientY,
+                    t: Date.now()
+                }
+            ];
         };
         const handleMouseUp = (event) => {
-            setClickData((prev) => {
-                const next = [
-                    ...prev.slice(-(MAX_CLICK_EVENTS - 1)),
-                    {
-                        type: "up",
-                        x: event.clientX,
-                        y: event.clientY,
-                        t: Date.now()
-                    }
-                ];
-                behaviorMetricsRef.current.clickData = next;
-                return next;
-            });
+            behaviorMetricsRef.current.clickData = [
+                ...behaviorMetricsRef.current.clickData.slice(-(MAX_CLICK_EVENTS - 1)),
+                {
+                    type: "up",
+                    x: event.clientX,
+                    y: event.clientY,
+                    t: Date.now()
+                }
+            ];
         };
         window.addEventListener("mousemove", handleMouseMove);
         window.addEventListener("mousedown", handleMouseDown);
@@ -316,10 +302,12 @@ export default function HomePage() {
 
     const handleAnswer = (answer) => {
         if (!startTime) return;
+        if (isSubmittingRef.current) return;
 
         const timeDiffMs = new Date().getTime() - startTime;
         const t = timeDiffMs / 1000;
         setFinalSolveTime(t);
+        setIsSubmittingCaptcha(true);
 
         setEndedTime(null);
         setEnded(false);
@@ -342,6 +330,7 @@ export default function HomePage() {
     const submitCaptcha = async (t, answer) => {
         if (isSubmittingRef.current) return;
         isSubmittingRef.current = true;
+        setIsSubmittingCaptcha(true);
 
 
         if (imgIntervalRef.current) {
@@ -419,6 +408,7 @@ export default function HomePage() {
             setResult("fail");
         } finally {
             isSubmittingRef.current = false;
+            setIsSubmittingCaptcha(false);
         }
     };
 
@@ -622,6 +612,7 @@ export default function HomePage() {
         setCaptchaToken("");
         setChallengeToken("");
         isSubmittingRef.current = false;
+        setIsSubmittingCaptcha(false);
 
     };
     return (
@@ -701,12 +692,12 @@ export default function HomePage() {
                                         <div className="aspect-video relative overflow-hidden rounded-2xl border border-white/10 bg-zinc-950">
                                             {type === "C" || type === "D" ? (
                                                 <div className="w-full h-full bg-zinc-900 relative flex items-center justify-center">
-                                                    {started && (type !== "D" || !ended) && (
+                                                    {started && (
                                                         <img
                                                             src={`${API}${videoUrl}`}
                                                             alt="captcha"
 
-                                                            className={`w-full h-full object-cover transition-all duration-300 ${ended ? type === "D" ? "opacity-0" : "opacity-40 filter blur-sm" : type === "C" ? "animate-move" : ""
+                                                            className={`w-full h-full object-cover transition-all duration-300 ${ended ? "opacity-40 filter blur-sm" : type === "C" && result === null && !isSubmittingCaptcha ? "animate-move" : ""
                                                                 }`}
                                                         />)}
                                                 </div>
@@ -799,6 +790,7 @@ export default function HomePage() {
                                                                         <button
                                                                             key={`a-${num}`}
                                                                             onClick={() => handleAnswer(num - 1)}
+                                                                            disabled={isSubmittingCaptcha}
                                                                             className="rounded-xl border border-violet-300/15 bg-zinc-900/80 p-2 text-xl backdrop-blur-sm transition hover:bg-violet-500/50"
                                                                         >
                                                                             {num}
@@ -812,6 +804,7 @@ export default function HomePage() {
                                                                         <button
                                                                             key={`option-${item}-${idx}`}
                                                                             onClick={() => handleAnswer(item)}
+                                                                            disabled={isSubmittingCaptcha}
                                                                             className="rounded-xl border border-violet-300/15 bg-zinc-900/80 p-2 text-xl backdrop-blur-sm transition hover:bg-violet-500/50"
                                                                         >
                                                                             {item}
