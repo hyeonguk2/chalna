@@ -23,7 +23,6 @@ export default function HomePage() {
     const [progress, setProgress] = useState(0);
     const imgIntervalRef = useRef(null);
     const loginTransitionRef = useRef(null);
-    const isSubmittingRef = useRef(false);
     const behaviorMetricsRef = useRef({
         mouseTrajectory: [],
         clickData: []
