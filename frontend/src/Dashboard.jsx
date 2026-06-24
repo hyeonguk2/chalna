@@ -14,7 +14,6 @@ const emptyDashboard = {
     { level: 2, label: "Level 2", types: ["D"], pass: 0, fail: 0 },
   ],
   riskTrend: Array(12).fill(0),
-  anomalyTrajectory: [],
   recentRows: [],
   latestMetrics: {
     trajectoryPoints: 0,
@@ -54,30 +53,6 @@ function getMetricStatus(value, threshold, mode = "under") {
   };
 }
 
-function normalizeTrajectory(points = []) {
-  if (!Array.isArray(points) || points.length === 0) return [];
-
-  const xs = points.map((point) => Number(point.x) || 0);
-  const ys = points.map((point) => Number(point.y) || 0);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const width = Math.max(maxX - minX, 1);
-  const height = Math.max(maxY - minY, 1);
-
-  return points.map((point) => ({
-    x: 8 + (((Number(point.x) || 0) - minX) / width) * 84,
-    y: 8 + (((Number(point.y) || 0) - minY) / height) * 84,
-  }));
-}
-
-function buildTrajectoryPath(points) {
-  return points
-    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
-    .join(" ");
-}
-
 function StatusBadge({ status }) {
   const classes = {
     정상: "border-emerald-400/20 bg-emerald-400/10 text-emerald-200",
@@ -112,6 +87,9 @@ function Tooltip({ text }) {
 
 export default function Dashboard() {
   const [dashboard, setDashboard] = useState(emptyDashboard);
+  const [weekRows, setWeekRows] = useState([]);
+  const [recentModalOpen, setRecentModalOpen] = useState(false);
+  const [recentLoading, setRecentLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -128,7 +106,6 @@ export default function Dashboard() {
           summary: { ...emptyDashboard.summary, ...(data.summary || {}) },
           captchaTypes: data.captchaTypes || emptyDashboard.captchaTypes,
           captchaLevels: data.captchaLevels || emptyDashboard.captchaLevels,
-          anomalyTrajectory: data.anomalyTrajectory || emptyDashboard.anomalyTrajectory,
           latestMetrics: { ...emptyDashboard.latestMetrics, ...(data.latestMetrics || {}) },
         });
         setError("");
@@ -144,6 +121,26 @@ export default function Dashboard() {
     const timer = setInterval(loadDashboard, 10000);
     return () => clearInterval(timer);
   }, []);
+
+  const showWeekRows = async () => {
+    try {
+      setRecentLoading(true);
+      const res = await fetch("/api/dashboard/security/recent?days=7&limit=500", { credentials: "include" });
+      if (!res.ok) throw new Error("recent request failed");
+      const data = await res.json();
+      setWeekRows(data.recentRows || []);
+      setRecentModalOpen(true);
+    } catch (err) {
+      console.error(err);
+      setError("최근 일주일 데이터를 불러올 수 없습니다.");
+    } finally {
+      setRecentLoading(false);
+    }
+  };
+
+  const closeRecentModal = () => {
+    setRecentModalOpen(false);
+  };
 
   const summaryCards = useMemo(() => ([
     { label: "오늘 보안 이벤트", value: dashboard.summary.totalAttempts, suffix: "건", tone: "text-zinc-300", help: "최근 24시간 동안 저장된 CAPTCHA 판정과 로그인 판정 이벤트 수입니다." },
@@ -191,15 +188,13 @@ export default function Dashboard() {
     ? dashboard.latestMetrics.analysisDetails
     : fallbackMouseReasons;
   const positiveReasons = mouseReasons.filter((item) => Number(item.score) > 0);
-  const anomalyPoints = normalizeTrajectory(dashboard.anomalyTrajectory);
-  const anomalyPath = buildTrajectoryPath(anomalyPoints);
-
   const speedRows = [
     { label: "궤적 포인트", value: formatNumber(dashboard.latestMetrics.trajectoryPoints, "개"), detail: "최근 로그인 시도에서 수집한 마우스 좌표 수입니다. 10개 미만이면 분석 신뢰도가 낮아 일부 점수가 더해집니다." },
     { label: "선형성 MSE", value: formatNumber(dashboard.latestMetrics.linearMse), detail: "마우스 이동이 직선 회귀선에서 얼마나 벗어났는지입니다. 낮을수록 너무 직선적인 움직임입니다." },
     { label: "클릭 유지 편차", value: formatNumber(dashboard.latestMetrics.clickHoldStd, "ms"), detail: "여러 클릭의 down/up 유지 시간이 얼마나 다른지입니다. 5ms 미만이면 반복 클릭 가능성을 의심합니다." },
     { label: "최종 봇 점수", value: formatNumber(dashboard.latestMetrics.botScore, "점"), detail: "마우스 분석 항목별 점수를 합산한 값입니다. 60점 이상이면 이상 탐지로 처리됩니다." },
   ];
+  const displayedRecentRows = dashboard.recentRows;
 
   return (
     <div className="min-h-screen w-full bg-zinc-950 text-white">
@@ -409,73 +404,17 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="mt-4 rounded-xl border border-white/10 bg-zinc-950/50 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <p className="font-medium text-white">이상 궤적 샘플</p>
-                  <Tooltip text="봇 점수 60점 이상으로 판정된 최근 로그인 이벤트의 마우스 좌표 샘플입니다. 전체 좌표 중 최대 80개를 저장해 화면 크기에 맞게 정규화합니다." />
-                </div>
-                <span className="text-sm text-zinc-500">{dashboard.anomalyTrajectory.length}개 점</span>
-              </div>
-              <div className="h-44 rounded-lg border border-white/5 bg-black/20 p-3">
-                {anomalyPoints.length > 1 ? (
-                  <svg viewBox="0 0 100 100" className="h-full w-full">
-                    <path d={anomalyPath} fill="none" stroke="#fbbf24" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    <circle cx={anomalyPoints[0].x} cy={anomalyPoints[0].y} r="2.5" fill="#22c55e" />
-                    <circle cx={anomalyPoints[anomalyPoints.length - 1].x} cy={anomalyPoints[anomalyPoints.length - 1].y} r="2.5" fill="#ef4444" />
-                  </svg>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-zinc-500">
-                    아직 저장된 이상 궤적이 없습니다.
-                  </div>
-                )}
-              </div>
-              <div className="mt-2 flex items-center gap-4 text-xs text-zinc-500">
-                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />시작</span>
-                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-500" />끝</span>
-              </div>
-            </div>
           </div>
         </section>
 
         <section className="mt-6 grid gap-6 lg:grid-cols-[0.85fr_1.15fr]">
           <div className="rounded-2xl border border-white/10 bg-zinc-900/70 p-6">
             <div className="flex items-center gap-2">
-              <h2 className="text-xl font-semibold text-white">CAPTCHA 레벨별 결과</h2>
-              <Tooltip text="Level 1은 Type A/B/C, Level 2는 Type D로 묶어서 통과와 실패를 비교합니다." />
+              <h2 className="text-xl font-semibold text-white">CAPTCHA 타입별 결과</h2>
+              <Tooltip text="각 CAPTCHA 타입별 성공/실패 수입니다. A/B/C는 Level 1, D는 Level 2에 속합니다." />
             </div>
             <p className="mt-1 text-sm text-zinc-400">Level 1은 A/B/C, Level 2는 D 기준</p>
-            <div className="mt-6 space-y-5">
-              {(dashboard.captchaLevels || emptyDashboard.captchaLevels).map((item) => {
-                const total = item.pass + item.fail;
-                const passWidth = total > 0 ? (item.pass / total) * 100 : 0;
-                return (
-                  <div key={item.level}>
-                    <div className="mb-2 flex items-center justify-between text-sm">
-                      <span className="font-medium text-white">
-                        {item.label} <span className="text-zinc-500">Type {item.types.join("/")}</span>
-                      </span>
-                      <span className="text-zinc-400">
-                        통과 {item.pass} / 실패 {item.fail}
-                      </span>
-                    </div>
-                    <div className="h-3 overflow-hidden rounded-full bg-red-400/20">
-                      <div
-                        className="h-full rounded-full bg-emerald-400"
-                        style={{ width: `${passWidth}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="mt-7 border-t border-white/10 pt-5">
-              <div className="mb-4 flex items-center gap-2">
-                <p className="text-sm font-medium text-zinc-300">타입별 상세</p>
-                <Tooltip text="각 CAPTCHA 타입별 성공/실패 수입니다. A/B/C는 Level 1, D는 Level 2에 속합니다." />
-              </div>
-              <div className="space-y-4">
+            <div className="mt-6 space-y-4">
               {(dashboard.captchaTypes || emptyDashboard.captchaTypes).map((item) => {
                 const total = item.pass + item.fail;
                 const passWidth = total > 0 ? (item.pass / total) * 100 : 0;
@@ -498,16 +437,27 @@ export default function Dashboard() {
                   </div>
                 );
               })}
-              </div>
             </div>
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-zinc-900/70 p-6">
-            <div className="flex items-center gap-2">
-              <h2 className="text-xl font-semibold text-white">최근 로그인 판정</h2>
-              <Tooltip text="CAPTCHA 판정과 최종 로그인 마우스 분석 이벤트를 최신순으로 보여줍니다." />
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-semibold text-white">최근 로그인 판정</h2>
+                  <Tooltip text="기본 표는 최신 10개 이벤트입니다. 더보기를 누르면 최근 7일 데이터가 팝업으로 열립니다." />
+                </div>
+                <p className="mt-1 text-sm text-zinc-400">최신 10개 데이터</p>
+              </div>
+              <button
+                type="button"
+                onClick={showWeekRows}
+                disabled={recentLoading}
+                className="rounded-lg border border-violet-300/20 bg-violet-500/10 px-3 py-2 text-sm text-violet-100 transition hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {recentLoading ? "불러오는 중" : "더보기"}
+              </button>
             </div>
-            <p className="mt-1 text-sm text-zinc-400">CAPTCHA 결과와 마우스 이상 탐지를 분리 표시</p>
             <div className="mt-5 overflow-x-auto rounded-xl border border-white/10">
               <table className="w-full min-w-[720px] border-collapse text-left text-sm">
                 <thead className="bg-zinc-950/80 text-zinc-400">
@@ -521,7 +471,7 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/10">
-                  {dashboard.recentRows.length > 0 ? dashboard.recentRows.map((row) => (
+                  {displayedRecentRows.length > 0 ? displayedRecentRows.map((row) => (
                     <tr key={row.id} className="text-zinc-200">
                       <td className="px-4 py-3 text-zinc-400">{row.id}</td>
                       <td className="px-4 py-3">{row.user}</td>
@@ -556,6 +506,60 @@ export default function Dashboard() {
           ))}
         </section>
       </main>
+
+      {recentModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <div className="max-h-[85vh] w-full max-w-6xl overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl shadow-black/50">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-6 py-4">
+              <div>
+                <h2 className="text-xl font-semibold text-white">최근 일주일 로그인 판정</h2>
+                <p className="mt-1 text-sm text-zinc-400">최근 7일 보안 이벤트 {weekRows.length}건</p>
+              </div>
+              <button
+                type="button"
+                onClick={closeRecentModal}
+                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-zinc-200 transition hover:bg-white/10"
+              >
+                닫기
+              </button>
+            </div>
+            <div className="max-h-[calc(85vh-88px)] overflow-auto">
+              <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+                <thead className="sticky top-0 bg-zinc-950 text-zinc-400">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">시도 ID</th>
+                    <th className="px-4 py-3 font-medium">사용자</th>
+                    <th className="px-4 py-3 font-medium">캡챠</th>
+                    <th className="px-4 py-3 font-medium">마우스 판정</th>
+                    <th className="px-4 py-3 font-medium">점수</th>
+                    <th className="px-4 py-3 font-medium">결과</th>
+                    <th className="px-4 py-3 font-medium">시간</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {weekRows.length > 0 ? weekRows.map((row) => (
+                    <tr key={row.id} className="text-zinc-200">
+                      <td className="px-4 py-3 text-zinc-400">{row.id}</td>
+                      <td className="px-4 py-3">{row.user}</td>
+                      <td className="px-4 py-3">Level {row.captchaLevel} / Type {row.captcha}</td>
+                      <td className="px-4 py-3">{row.mouse}</td>
+                      <td className="px-4 py-3">{row.botScore}</td>
+                      <td className="px-4 py-3"><StatusBadge status={row.result} /></td>
+                      <td className="px-4 py-3 text-zinc-400">{row.time}</td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td className="px-4 py-10 text-center text-zinc-500" colSpan="7">
+                        최근 일주일 동안 기록된 보안 이벤트가 없습니다.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

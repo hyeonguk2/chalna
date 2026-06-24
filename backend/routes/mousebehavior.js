@@ -445,6 +445,17 @@ module.exports = (db) => {
         fail: items.filter((event) => event.captcha_result && event.captcha_result !== "success").length,
     });
 
+    const formatSecurityEventRow = (event) => ({
+        id: `EV-${event.id}`,
+        user: event.userid || "-",
+        captcha: event.captcha_type || "-",
+        captchaLevel: event.captcha_type ? getCaptchaLevel(event.captcha_type) : "-",
+        mouse: event.mouse_result || (event.phase === "captcha" ? "CAPTCHA 판정" : "-"),
+        botScore: Number(event.bot_score) || 0,
+        result: getStatusLabel(event),
+        time: formatTime(event.created_at),
+    });
+
     router.post("/api/login", (req, res) => {
         try {
             const payload = req.body;
@@ -737,16 +748,7 @@ module.exports = (db) => {
 
             const latestLogin = loginEvents[0] || {};
             const latestAnomalyLogin = loginEvents.find((event) => Number(event.bot_score) >= 60) || {};
-            const recentRows = events.slice(0, 12).map((event) => ({
-                id: `EV-${event.id}`,
-                user: event.userid || "-",
-                captcha: event.captcha_type || "-",
-                captchaLevel: event.captcha_type ? getCaptchaLevel(event.captcha_type) : "-",
-                mouse: event.mouse_result || (event.phase === "captcha" ? "CAPTCHA 판정" : "-"),
-                botScore: Number(event.bot_score) || 0,
-                result: getStatusLabel(event),
-                time: formatTime(event.created_at),
-            }));
+            const recentRows = events.slice(0, 10).map(formatSecurityEventRow);
 
             const parseTrajectorySample = (rawSample) => {
                 if (!rawSample) return [];
@@ -797,6 +799,30 @@ module.exports = (db) => {
         } catch (error) {
             console.error("dashboard security api error:", error);
             res.status(500).json({ message: "대시보드 데이터를 불러오지 못했습니다." });
+        }
+    });
+
+    router.get("/api/dashboard/security/recent", async (req, res) => {
+        try {
+            const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 7);
+            const limit = Math.min(Math.max(Number(req.query.limit) || 300, 1), 500);
+            const since = Date.now() - days * 24 * 60 * 60 * 1000;
+            const events = await query(
+                `SELECT * FROM security_events
+                 WHERE created_at >= ?
+                 ORDER BY created_at DESC
+                 LIMIT ?`,
+                [since, limit]
+            );
+
+            res.json({
+                days,
+                total: events.length,
+                recentRows: events.map(formatSecurityEventRow),
+            });
+        } catch (error) {
+            console.error("dashboard recent api error:", error);
+            res.status(500).json({ message: "최근 로그인 판정을 불러오지 못했습니다." });
         }
     });
 
