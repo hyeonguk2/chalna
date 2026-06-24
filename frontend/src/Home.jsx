@@ -617,7 +617,7 @@ export default function HomePage() {
     };
     return (
 
-        <div className="h-[100dvh] w-full overflow-hidden bg-zinc-950 text-white flex flex-col">
+        <div className="min-h-[100dvh] w-full overflow-y-auto bg-zinc-950 text-white flex flex-col">
             {/* Header */}
             <header className="border-b border-zinc-800 backdrop-blur">
                 <div className="max-w-7xl mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-4">
@@ -669,8 +669,8 @@ export default function HomePage() {
                         </p>
 
                         {captchaopen && (
-                                <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80 p-4 backdrop-blur-sm">
-                                    <div className="w-[800px] max-w-[95vw] rounded-3xl border border-violet-400/20 bg-gradient-to-br from-violet-950/80 via-zinc-900 to-zinc-950 p-6 shadow-2xl shadow-violet-950/40">
+                                <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-zinc-950/80 p-4 backdrop-blur-sm sm:items-center">
+                                    <div className="my-auto max-h-[calc(100dvh-2rem)] w-[800px] max-w-[95vw] overflow-y-auto rounded-3xl border border-violet-400/20 bg-gradient-to-br from-violet-950/80 via-zinc-900 to-zinc-950 p-6 shadow-2xl shadow-violet-950/40">
                                         <div className="mb-5 flex items-center justify-between">
                                             <div>
                                                 <p className="text-sm text-violet-200/70">보안 인증</p>
