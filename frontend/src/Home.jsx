@@ -35,6 +35,7 @@ export default function HomePage() {
     const [loginUsername, setLoginUsername] = useState("");
     const [loginPassword, setLoginPassword] = useState("");
     const [mouseTrajectory, setMouseTrajectory] = useState([]);
+    const [clickData, setClickData] = useState([]);
     const [loginError, setLoginError] = useState("");
     const [isLoggingIn, setIsLoggingIn] = useState(false);
 
@@ -83,9 +84,35 @@ export default function HomePage() {
                 lastLoggedTime = now;
             }
         };
+        const handleMouseDown = (event) => {
+            setClickData((prev) => [
+                ...prev.slice(-99),
+                {
+                    type: "down",
+                    x: event.clientX,
+                    y: event.clientY,
+                    t: Date.now()
+                }
+            ]);
+        };
+        const handleMouseUp = (event) => {
+            setClickData((prev) => [
+                ...prev.slice(-99),
+                {
+                    type: "up",
+                    x: event.clientX,
+                    y: event.clientY,
+                    t: Date.now()
+                }
+            ]);
+        };
         window.addEventListener("mousemove", handleMouseMove);
+        window.addEventListener("mousedown", handleMouseDown);
+        window.addEventListener("mouseup", handleMouseUp);
         return () => {
             window.removeEventListener("mousemove", handleMouseMove);
+            window.removeEventListener("mousedown", handleMouseDown);
+            window.removeEventListener("mouseup", handleMouseUp);
         };
     }, []);
 
@@ -96,7 +123,7 @@ export default function HomePage() {
             password: loginPassword,
             behaviorMetrics: {
             mouseTrajectory,
-            clickData: []
+            clickData
             },
             captchaData: {
                 answer: true,
@@ -139,6 +166,7 @@ export default function HomePage() {
             setLoginUsername("");
             setLoginPassword("");
             setMouseTrajectory([]);
+            setClickData([]);
         } catch (error) {
             console.error("login failed:", error);
             setLoginError("서버 연결 실패");

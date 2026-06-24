@@ -108,6 +108,17 @@ const calculateLinearRegression = (xCoords, yCoords) => {
     return { slope, intercept };
 };
 
+const getDistance = (a, b) => {
+    const dx = Number(b.x) - Number(a.x);
+    const dy = Number(b.y) - Number(a.y);
+    return Math.sqrt(dx * dx + dy * dy);
+};
+
+const formatMetric = (value, digits = 2) => {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) return "-";
+    return Number(value).toFixed(digits);
+};
+
 // ==========================================
 // 2. 인지적 직관 기반 봇 판별 알고리즘
 // ==========================================
@@ -115,21 +126,47 @@ const analyzeBotBehavior = (metrics) => {
     let botScore = 0;
     let linearMse = null;
     let mouseReason = "정상 흔들림";
+    const details = [];
 
-    // --- [1] 마우스 궤적 선형성 분석 (배점 60점) ---
+    // --- [1] 마우스 궤적 분석 ---
     const traj = metrics.mouseTrajectory || [];
 
-    if (traj.length < 5) {
-        botScore += 60;
+    if (traj.length === 0) {
+        botScore += 35;
+        mouseReason = "궤적 없음";
+        details.push({
+            label: "움직임 데이터",
+            value: "0개",
+            result: "없음",
+            score: 35,
+            detail: "마우스 좌표가 전혀 없으면 API 자동 호출 가능성을 의심합니다.",
+        });
+    } else if (traj.length < 10) {
+        botScore += 20;
         mouseReason = "궤적 부족";
+        details.push({
+            label: "움직임 데이터",
+            value: `${traj.length}개`,
+            result: "부족",
+            score: 20,
+            detail: "좌표가 10개 미만이면 분석 신뢰도가 낮아 위험 점수를 일부 더합니다.",
+        });
     } else {
         const xCoords = traj.map(pt => pt.x);
         const yCoords = traj.map(pt => pt.y);
         const xStdDev = calculateStdDev(xCoords);
+        const yStdDev = calculateStdDev(yCoords);
 
-        if (xStdDev === 0) {
-            botScore += 60;
+        if (xStdDev === 0 && yStdDev === 0) {
+            botScore += 35;
             mouseReason = "수직 고정 궤적";
+            details.push({
+                label: "움직임 데이터",
+                value: `${traj.length}개`,
+                result: "좌표 고정",
+                score: 35,
+                detail: "좌표 개수는 있지만 위치 변화가 없으면 실제 마우스 이동으로 보기 어렵습니다.",
+            });
         } else {
             const { slope, intercept } = calculateLinearRegression(xCoords, yCoords);
 
@@ -141,14 +178,72 @@ const analyzeBotBehavior = (metrics) => {
             const mse = squaredErrorsSum / traj.length;
             linearMse = Number.isFinite(mse) ? mse : null;
 
-            if (linearMse !== null && linearMse < 2.0) {
-                botScore += 60;
-                mouseReason = "선형 궤적";
+            let totalDistance = 0;
+            const speeds = [];
+            for (let i = 1; i < traj.length; i++) {
+                const distance = getDistance(traj[i - 1], traj[i]);
+                const dt = Math.max(Number(traj[i].t) - Number(traj[i - 1].t), 1);
+                totalDistance += distance;
+                speeds.push(distance / dt);
+            }
+
+            const directDistance = getDistance(traj[0], traj[traj.length - 1]);
+            const straightness = totalDistance > 0 ? directDistance / totalDistance : 0;
+            const meanSpeed = speeds.length > 0 ? calculateMean(speeds) : 0;
+            const speedStdDev = calculateStdDev(speeds);
+            const speedCv = meanSpeed > 0 ? speedStdDev / meanSpeed : null;
+
+            details.push({
+                label: "움직임 데이터",
+                value: `${traj.length}개`,
+                result: "충분",
+                score: 0,
+                detail: "좌표 수가 충분해서 경로 형태와 속도 패턴을 분석했습니다.",
+            });
+
+            if (linearMse !== null && linearMse < 2.0 && straightness > 0.98 && totalDistance > 100) {
+                botScore += 35;
+                mouseReason = "직선 이동";
+                details.push({
+                    label: "이동 경로",
+                    value: `MSE ${formatMetric(linearMse)}, 직선도 ${formatMetric(straightness)}`,
+                    result: "너무 직선적",
+                    score: 35,
+                    detail: "흔들림이 거의 없고 시작점과 끝점이 총 이동거리와 거의 일치하면 자동 생성 경로로 의심합니다.",
+                });
+            } else {
+                details.push({
+                    label: "이동 경로",
+                    value: `MSE ${formatMetric(linearMse)}, 직선도 ${formatMetric(straightness)}`,
+                    result: "자연스러움",
+                    score: 0,
+                    detail: "직선성과 흔들림이 위험 기준을 동시에 넘지 않았습니다.",
+                });
+            }
+
+            if (speedCv !== null && speedCv < 0.15 && speeds.length >= 10) {
+                botScore += 20;
+                mouseReason = mouseReason === "정상 흔들림" ? "속도 일정" : `${mouseReason}, 속도 일정`;
+                details.push({
+                    label: "속도 변화",
+                    value: `CV ${formatMetric(speedCv)}`,
+                    result: "너무 일정",
+                    score: 20,
+                    detail: "마우스 속도 변화율이 지나치게 낮으면 사람이 움직인 패턴으로 보기 어렵습니다.",
+                });
+            } else {
+                details.push({
+                    label: "속도 변화",
+                    value: speedCv === null ? "-" : `CV ${formatMetric(speedCv)}`,
+                    result: "정상 변동",
+                    score: 0,
+                    detail: "속도가 충분히 변해 사람이 움직인 패턴에 가깝습니다.",
+                });
             }
         }
     }
 
-    // --- [2] 클릭 타이밍 분포 분석 (배점 40점) ---
+    // --- [2] 클릭 타이밍 분포 분석 ---
     const clicks = metrics.clickData || [];
     const holdTimes = [];
 
@@ -163,12 +258,34 @@ const analyzeBotBehavior = (metrics) => {
 
     if (holdTimes.length > 0) {
         const stdDev = calculateStdDev(holdTimes);
-        if (stdDev < 1.0) {
-            botScore += 40;
+        if (holdTimes.length >= 2 && stdDev < 5.0) {
+            botScore += 25;
             mouseReason = mouseReason === "정상 흔들림" ? "클릭 간격 일정" : `${mouseReason}, 클릭 일정`;
+            details.push({
+                label: "클릭 패턴",
+                value: `${formatMetric(stdDev, 1)}ms`,
+                result: "반복 의심",
+                score: 25,
+                detail: "여러 클릭의 누름 시간이 거의 같으면 자동 클릭 가능성을 의심합니다.",
+            });
+        } else {
+            details.push({
+                label: "클릭 패턴",
+                value: `${formatMetric(stdDev, 1)}ms`,
+                result: "정상 편차",
+                score: 0,
+                detail: "클릭 유지 시간 편차가 위험 기준보다 큽니다.",
+            });
         }
     } else {
-        botScore += 20;
+        botScore += 10;
+        details.push({
+            label: "클릭 패턴",
+            value: "클릭쌍 없음",
+            result: "근거 부족",
+            score: 10,
+            detail: "클릭 down/up 쌍이 없어서 낮은 위험 점수만 더합니다.",
+        });
     }
 
     console.log(`[Bot Detection] 트래킹 수: ${traj.length}, 클릭 쌍: ${holdTimes.length} -> 산출된 위험 점수: ${botScore}`);
@@ -181,6 +298,7 @@ const analyzeBotBehavior = (metrics) => {
         linearMse,
         clickHoldStd: holdTimes.length > 0 ? calculateStdDev(holdTimes) : null,
         clickPairs: holdTimes.length,
+        details,
     };
 };
 
@@ -214,6 +332,8 @@ module.exports = (db) => {
                 linear_mse DOUBLE,
                 click_hold_std DOUBLE,
                 click_pairs INT DEFAULT 0,
+                trajectory_sample JSON,
+                analysis_details JSON,
                 click_time DOUBLE,
                 badtime DOUBLE,
                 result VARCHAR(30) NOT NULL,
@@ -232,6 +352,24 @@ module.exports = (db) => {
             }
 
             console.log("security_events table ready");
+
+            db.query(
+                "ALTER TABLE security_events ADD COLUMN trajectory_sample JSON AFTER click_pairs",
+                (alterErr) => {
+                    if (alterErr && alterErr.code !== "ER_DUP_FIELDNAME") {
+                        console.error("security_events trajectory_sample migration error:", alterErr);
+                    }
+                }
+            );
+
+            db.query(
+                "ALTER TABLE security_events ADD COLUMN analysis_details JSON AFTER trajectory_sample",
+                (alterErr) => {
+                    if (alterErr && alterErr.code !== "ER_DUP_FIELDNAME") {
+                        console.error("security_events analysis_details migration error:", alterErr);
+                    }
+                }
+            );
         });
     };
 
@@ -242,9 +380,9 @@ module.exports = (db) => {
             INSERT INTO security_events (
                 phase, userid, captcha_type, captcha_level, captcha_result,
                 mouse_result, bot_score, trajectory_points, linear_mse,
-                click_hold_std, click_pairs, click_time, badtime, result,
+                click_hold_std, click_pairs, trajectory_sample, analysis_details, click_time, badtime, result,
                 message, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         const values = [
@@ -259,6 +397,8 @@ module.exports = (db) => {
             event.linearMse ?? null,
             event.clickHoldStd ?? null,
             event.clickPairs || 0,
+            event.trajectorySample ? JSON.stringify(event.trajectorySample) : null,
+            event.analysisDetails ? JSON.stringify(event.analysisDetails) : null,
             event.clickTime ?? null,
             event.badtime ?? null,
             event.result,
@@ -269,6 +409,20 @@ module.exports = (db) => {
         db.query(sql, values, (err) => {
             if (err) console.error("security event insert error:", err);
         });
+    };
+
+    const sampleTrajectory = (trajectory = [], maxPoints = 80) => {
+        if (!Array.isArray(trajectory) || trajectory.length === 0) return [];
+
+        const step = Math.max(1, Math.ceil(trajectory.length / maxPoints));
+        return trajectory
+            .filter((_, index) => index % step === 0)
+            .slice(0, maxPoints)
+            .map((point) => ({
+                x: Number(point.x) || 0,
+                y: Number(point.y) || 0,
+                t: Number(point.t) || 0,
+            }));
     };
 
     const getStatusLabel = (row) => {
@@ -419,6 +573,7 @@ module.exports = (db) => {
                     // (4) 핵심 로직: 마우스 행동 기반 봇 분석 수행
                     const behaviorAnalysis = analyzeBotBehavior(payload.behaviorMetrics || {});
                     const isBot = behaviorAnalysis.isBot;
+                    const trajectorySample = sampleTrajectory(payload.behaviorMetrics?.mouseTrajectory);
 
                     // 🤖 [봇 감지 시 처리] 봇으로 판정되면 실패 횟수를 누적하고 차단 검사 진행
                     if (isBot) {
@@ -445,6 +600,8 @@ module.exports = (db) => {
                             linearMse: behaviorAnalysis.linearMse,
                             clickHoldStd: behaviorAnalysis.clickHoldStd,
                             clickPairs: behaviorAnalysis.clickPairs,
+                            trajectorySample,
+                            analysisDetails: behaviorAnalysis.details,
                             result: "bot",
                             message: "비정상 패턴 감지",
                         });
@@ -477,6 +634,8 @@ module.exports = (db) => {
                         linearMse: behaviorAnalysis.linearMse,
                         clickHoldStd: behaviorAnalysis.clickHoldStd,
                         clickPairs: behaviorAnalysis.clickPairs,
+                        trajectorySample,
+                        analysisDetails: behaviorAnalysis.details,
                         result: "success",
                         message: "로그인 및 인증 성공",
                     });
@@ -577,6 +736,7 @@ module.exports = (db) => {
             }
 
             const latestLogin = loginEvents[0] || {};
+            const latestAnomalyLogin = loginEvents.find((event) => Number(event.bot_score) >= 60) || {};
             const recentRows = events.slice(0, 12).map((event) => ({
                 id: `EV-${event.id}`,
                 user: event.userid || "-",
@@ -588,14 +748,27 @@ module.exports = (db) => {
                 time: formatTime(event.created_at),
             }));
 
-            const mousePoints = latestLogin.trajectory_points > 0
-                ? Array.from({ length: Math.min(Number(latestLogin.trajectory_points), 10) }, (_, index) => {
-                    const x = 6 + index * 9.8;
-                    const baseY = 78 - index * 6;
-                    const wobble = (Number(latestLogin.linear_mse) || 0) > 2 ? Math.sin(index) * 8 : 0;
-                    return [Math.round(x), Math.max(12, Math.round(baseY + wobble))];
-                })
-                : [];
+            const parseTrajectorySample = (rawSample) => {
+                if (!rawSample) return [];
+                try {
+                    const parsed = typeof rawSample === "string" ? JSON.parse(rawSample) : rawSample;
+                    return Array.isArray(parsed) ? parsed : [];
+                } catch (error) {
+                    return [];
+                }
+            };
+
+            const parseAnalysisDetails = (rawDetails) => {
+                if (!rawDetails) return [];
+                try {
+                    const parsed = typeof rawDetails === "string" ? JSON.parse(rawDetails) : rawDetails;
+                    return Array.isArray(parsed) ? parsed : [];
+                } catch (error) {
+                    return [];
+                }
+            };
+
+            const anomalyTrajectory = parseTrajectorySample(latestAnomalyLogin.trajectory_sample);
 
             res.json({
                 summary: {
@@ -608,7 +781,7 @@ module.exports = (db) => {
                 captchaLevels,
                 riskTrend,
                 recentRows,
-                mousePoints,
+                anomalyTrajectory,
                 latestMetrics: {
                     trajectoryPoints: Number(latestLogin.trajectory_points) || 0,
                     linearMse: latestLogin.linear_mse === null || latestLogin.linear_mse === undefined
@@ -618,6 +791,7 @@ module.exports = (db) => {
                         ? null
                         : Number(latestLogin.click_hold_std),
                     botScore: Number(latestLogin.bot_score) || 0,
+                    analysisDetails: parseAnalysisDetails(latestLogin.analysis_details),
                 },
             });
         } catch (error) {

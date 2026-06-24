@@ -14,26 +14,16 @@ const emptyDashboard = {
     { level: 2, label: "Level 2", types: ["D"], pass: 0, fail: 0 },
   ],
   riskTrend: Array(12).fill(0),
-  mousePoints: [],
+  anomalyTrajectory: [],
   recentRows: [],
   latestMetrics: {
     trajectoryPoints: 0,
     linearMse: null,
     clickHoldStd: null,
     botScore: 0,
+    analysisDetails: [],
   },
 };
-
-function buildLinePath(values) {
-  const safeValues = values.length > 0 ? values : [0];
-  return safeValues
-    .map((value, index) => {
-      const x = safeValues.length === 1 ? 0 : (index / (safeValues.length - 1)) * 100;
-      const y = 100 - Math.min(Math.max(Number(value) || 0, 0), 100);
-      return `${index === 0 ? "M" : "L"} ${x} ${y}`;
-    })
-    .join(" ");
-}
 
 function formatNumber(value, suffix = "") {
   if (value === null || value === undefined) return "-";
@@ -64,6 +54,30 @@ function getMetricStatus(value, threshold, mode = "under") {
   };
 }
 
+function normalizeTrajectory(points = []) {
+  if (!Array.isArray(points) || points.length === 0) return [];
+
+  const xs = points.map((point) => Number(point.x) || 0);
+  const ys = points.map((point) => Number(point.y) || 0);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const width = Math.max(maxX - minX, 1);
+  const height = Math.max(maxY - minY, 1);
+
+  return points.map((point) => ({
+    x: 8 + (((Number(point.x) || 0) - minX) / width) * 84,
+    y: 8 + (((Number(point.y) || 0) - minY) / height) * 84,
+  }));
+}
+
+function buildTrajectoryPath(points) {
+  return points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
+    .join(" ");
+}
+
 function StatusBadge({ status }) {
   const classes = {
     정상: "border-emerald-400/20 bg-emerald-400/10 text-emerald-200",
@@ -75,6 +89,23 @@ function StatusBadge({ status }) {
   return (
     <span className={`rounded-full border px-2.5 py-1 text-xs ${classes[status] || classes.이상}`}>
       {status}
+    </span>
+  );
+}
+
+function Tooltip({ text }) {
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label="설명 보기"
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/10 bg-white/5 text-xs text-zinc-400 transition hover:border-violet-300/30 hover:text-violet-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300"
+      >
+        ?
+      </button>
+      <span className="pointer-events-none absolute left-1/2 top-7 z-30 hidden w-64 -translate-x-1/2 rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-left text-xs leading-relaxed text-zinc-300 shadow-2xl shadow-black/40 group-hover:block group-focus-within:block">
+        {text}
+      </span>
     </span>
   );
 }
@@ -97,6 +128,7 @@ export default function Dashboard() {
           summary: { ...emptyDashboard.summary, ...(data.summary || {}) },
           captchaTypes: data.captchaTypes || emptyDashboard.captchaTypes,
           captchaLevels: data.captchaLevels || emptyDashboard.captchaLevels,
+          anomalyTrajectory: data.anomalyTrajectory || emptyDashboard.anomalyTrajectory,
           latestMetrics: { ...emptyDashboard.latestMetrics, ...(data.latestMetrics || {}) },
         });
         setError("");
@@ -114,45 +146,59 @@ export default function Dashboard() {
   }, []);
 
   const summaryCards = useMemo(() => ([
-    { label: "오늘 보안 이벤트", value: dashboard.summary.totalAttempts, suffix: "건", tone: "text-zinc-300" },
-    { label: "CAPTCHA 통과율", value: dashboard.summary.captchaPassRate, suffix: "%", tone: "text-emerald-300" },
-    { label: "마우스 이상 탐지", value: dashboard.summary.mouseAnomalies, suffix: "건", tone: "text-amber-300" },
-    { label: "차단/락아웃", value: dashboard.summary.blocked, suffix: "건", tone: "text-red-300" },
+    { label: "오늘 보안 이벤트", value: dashboard.summary.totalAttempts, suffix: "건", tone: "text-zinc-300", help: "최근 24시간 동안 저장된 CAPTCHA 판정과 로그인 판정 이벤트 수입니다." },
+    { label: "CAPTCHA 통과율", value: dashboard.summary.captchaPassRate, suffix: "%", tone: "text-emerald-300", help: "CAPTCHA 이벤트 중 성공으로 기록된 비율입니다. Level 1과 Level 2 이벤트를 함께 계산합니다." },
+    { label: "마우스 이상 탐지", value: dashboard.summary.mouseAnomalies, suffix: "건", tone: "text-amber-300", help: "로그인 이벤트 중 봇 점수가 60점 이상으로 계산된 건수입니다." },
+    { label: "차단/락아웃", value: dashboard.summary.blocked, suffix: "건", tone: "text-red-300", help: "봇으로 판정되었거나 차단 상태로 기록된 이벤트 수입니다." },
   ]), [dashboard.summary]);
 
-  const linePath = buildLinePath(dashboard.riskTrend || []);
+  const trendBars = (dashboard.riskTrend?.length ? dashboard.riskTrend : emptyDashboard.riskTrend)
+    .map((value) => clampPercent(value));
   const botScore = Number(dashboard.latestMetrics.botScore) || 0;
   const botStatus = getMetricStatus(botScore, 60, "over");
-  const linearStatus = getMetricStatus(dashboard.latestMetrics.linearMse, 2, "under");
-  const clickStatus = getMetricStatus(dashboard.latestMetrics.clickHoldStd, 1, "under");
   const pointCount = Number(dashboard.latestMetrics.trajectoryPoints) || 0;
-  const pointStatus = getMetricStatus(pointCount, 5, "under");
-  const mouseChecks = [
+  const linearMse = dashboard.latestMetrics.linearMse;
+  const clickHoldStd = dashboard.latestMetrics.clickHoldStd;
+  const hasLinearMse = linearMse !== null && linearMse !== undefined && Number.isFinite(Number(linearMse));
+  const hasClickStd = clickHoldStd !== null && clickHoldStd !== undefined && Number.isFinite(Number(clickHoldStd));
+  const trajectoryRisk = pointCount < 10;
+  const straightRisk = !trajectoryRisk && hasLinearMse && Number(linearMse) < 2;
+  const clickRisk = hasClickStd && Number(clickHoldStd) < 5;
+  const fallbackMouseReasons = [
     {
-      label: "궤적 수집량",
+      label: "움직임 데이터",
       value: formatNumber(pointCount, "개"),
-      description: "5개 미만이면 판단 근거 부족",
-      status: pointStatus,
+      result: trajectoryRisk ? "부족" : "충분",
+      score: trajectoryRisk ? 20 : 0,
+      detail: "좌표가 10개 미만이면 분석 신뢰도가 낮아 위험 점수를 일부 더합니다.",
     },
     {
-      label: "선형성 MSE",
-      value: formatNumber(dashboard.latestMetrics.linearMse),
-      description: "2.0 미만이면 너무 직선적",
-      status: linearStatus,
+      label: "이동 경로",
+      value: hasLinearMse ? formatNumber(linearMse) : "-",
+      result: trajectoryRisk ? "검사 생략" : straightRisk ? "너무 직선적" : "자연스러움",
+      score: straightRisk ? 35 : 0,
+      detail: "MSE와 직선도가 동시에 위험 기준을 넘으면 자동 생성 경로로 의심합니다.",
     },
     {
-      label: "클릭 유지 편차",
-      value: formatNumber(dashboard.latestMetrics.clickHoldStd, "ms"),
-      description: "1.0ms 미만이면 반복 클릭 의심",
-      status: clickStatus,
+      label: "클릭 패턴",
+      value: hasClickStd ? formatNumber(clickHoldStd, "ms") : "클릭쌍 없음",
+      result: hasClickStd ? clickRisk ? "반복 의심" : "정상 편차" : "기본 가산",
+      score: hasClickStd ? clickRisk ? 25 : 0 : 10,
+      detail: "클릭쌍이 없으면 10점, 여러 클릭 유지시간이 거의 같으면 25점을 더합니다.",
     },
   ];
+  const mouseReasons = dashboard.latestMetrics.analysisDetails?.length
+    ? dashboard.latestMetrics.analysisDetails
+    : fallbackMouseReasons;
+  const positiveReasons = mouseReasons.filter((item) => Number(item.score) > 0);
+  const anomalyPoints = normalizeTrajectory(dashboard.anomalyTrajectory);
+  const anomalyPath = buildTrajectoryPath(anomalyPoints);
 
   const speedRows = [
-    { label: "궤적 포인트", value: formatNumber(dashboard.latestMetrics.trajectoryPoints, "개"), detail: "30ms 샘플링" },
-    { label: "선형성 MSE", value: formatNumber(dashboard.latestMetrics.linearMse), detail: "2.0 미만 위험" },
-    { label: "클릭 유지 편차", value: formatNumber(dashboard.latestMetrics.clickHoldStd, "ms"), detail: "1.0 미만 위험" },
-    { label: "최종 봇 점수", value: formatNumber(dashboard.latestMetrics.botScore, "점"), detail: "60점 이상 이상" },
+    { label: "궤적 포인트", value: formatNumber(dashboard.latestMetrics.trajectoryPoints, "개"), detail: "최근 로그인 시도에서 수집한 마우스 좌표 수입니다. 10개 미만이면 분석 신뢰도가 낮아 일부 점수가 더해집니다." },
+    { label: "선형성 MSE", value: formatNumber(dashboard.latestMetrics.linearMse), detail: "마우스 이동이 직선 회귀선에서 얼마나 벗어났는지입니다. 낮을수록 너무 직선적인 움직임입니다." },
+    { label: "클릭 유지 편차", value: formatNumber(dashboard.latestMetrics.clickHoldStd, "ms"), detail: "여러 클릭의 down/up 유지 시간이 얼마나 다른지입니다. 5ms 미만이면 반복 클릭 가능성을 의심합니다." },
+    { label: "최종 봇 점수", value: formatNumber(dashboard.latestMetrics.botScore, "점"), detail: "마우스 분석 항목별 점수를 합산한 값입니다. 60점 이상이면 이상 탐지로 처리됩니다." },
   ];
 
   return (
@@ -188,7 +234,10 @@ export default function Dashboard() {
               key={item.label}
               className="rounded-2xl border border-white/10 bg-zinc-900/70 p-5 shadow-xl shadow-black/10"
             >
-              <p className="text-sm text-zinc-400">{item.label}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm text-zinc-400">{item.label}</p>
+                <Tooltip text={item.help} />
+              </div>
               <div className="mt-3 flex items-end justify-between gap-3">
                 <p className="text-3xl font-semibold text-white">{formatNumber(item.value, item.suffix)}</p>
                 <p className={`text-sm font-medium ${item.tone}`}>실시간</p>
@@ -201,27 +250,58 @@ export default function Dashboard() {
           <div className="rounded-2xl border border-white/10 bg-zinc-900/70 p-6">
             <div className="mb-5 flex items-center justify-between gap-4">
               <div>
-                <h2 className="text-xl font-semibold text-white">이상 탐지 위험 추이</h2>
-                <p className="mt-1 text-sm text-zinc-400">최근 로그인 시도 기준 봇 점수</p>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-semibold text-white">이상 탐지 위험 추이</h2>
+                  <Tooltip text="최근 로그인 이벤트의 봇 점수 변화입니다. 0점에 가까우면 정상, 60점 이상이면 이상 탐지 대상입니다." />
+                </div>
+                <p className="mt-1 text-sm text-zinc-400">왼쪽은 오래된 시도, 오른쪽은 최신 시도</p>
               </div>
               <span className="rounded-full border border-red-400/20 bg-red-400/10 px-3 py-1 text-sm text-red-200">
                 임계값 60점
               </span>
             </div>
             <div className="h-64 rounded-xl border border-white/5 bg-zinc-950/60 p-4">
-              <svg viewBox="0 0 100 100" className="h-full w-full" preserveAspectRatio="none">
-                <line x1="0" y1="40" x2="100" y2="40" stroke="rgba(248,113,113,0.45)" strokeDasharray="3 3" />
-                <path d={linePath} fill="none" stroke="#a78bfa" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
-                <path d={`${linePath} L 100 100 L 0 100 Z`} fill="rgba(167,139,250,0.12)" />
-              </svg>
+              <div className="flex h-full gap-3">
+                <div className="flex flex-col justify-between py-1 text-right text-xs text-zinc-500">
+                  <span>100</span>
+                  <span className="text-red-300">60</span>
+                  <span>0</span>
+                </div>
+                <div className="relative min-w-0 flex-1 pb-6">
+                  <div className="absolute left-0 right-0 top-0 border-t border-white/10" />
+                  <div className="absolute left-0 right-0 top-[40%] border-t border-dashed border-red-300/60" />
+                  <div className="absolute left-0 right-0 bottom-6 border-t border-white/10" />
+                  <div className="grid h-full grid-cols-12 items-end gap-2 pb-6">
+                    {trendBars.map((value, index) => (
+                      <div key={`${index}-${value}`} className="flex h-full flex-col justify-end gap-1">
+                        <div
+                          className={`min-h-1 rounded-t ${value >= 60 ? "bg-red-400" : value > 0 ? "bg-violet-300" : "bg-zinc-700"}`}
+                          style={{ height: `${Math.max(value, value > 0 ? 4 : 2)}%` }}
+                          title={`${index + 1}번째 시도: ${value}점`}
+                        />
+                        <span className={`text-center text-[10px] ${value >= 60 ? "text-red-300" : "text-zinc-500"}`}>
+                          {value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-2 flex justify-between text-xs text-zinc-500">
+                    <span>과거</span>
+                    <span>최신</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-zinc-900/70 p-6">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-xl font-semibold text-white">마우스 이상 탐지</h2>
-                <p className="mt-1 text-sm text-zinc-400">최근 로그인 시도 기준 판정 요약</p>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-semibold text-white">마우스 이상 탐지</h2>
+                  <Tooltip text="움직임 데이터, 이동 경로, 클릭 패턴에서 더해진 점수가 60점 이상이면 이상으로 판정합니다." />
+                </div>
+                <p className="mt-1 text-sm text-zinc-400">어떤 항목 때문에 점수가 더해졌는지 표시</p>
               </div>
               <span className={`rounded-full border border-white/10 bg-white/5 px-3 py-1 text-sm ${botStatus.text}`}>
                 {botScore >= 60 ? "이상" : "정상"}
@@ -242,35 +322,128 @@ export default function Dashboard() {
                   style={{ width: `${clampPercent(botScore)}%` }}
                 />
               </div>
+              <div className="mt-2 flex justify-between text-xs text-zinc-500">
+                <span>0 정상</span>
+                <span className="text-red-300">60 이상</span>
+                <span>100</span>
+              </div>
             </div>
 
-            <div className="mt-5 space-y-4">
-              {mouseChecks.map((item) => (
-                <div key={item.label}>
-                  <div className="mb-2 flex items-center justify-between gap-3 text-sm">
-                    <div>
-                      <span className="font-medium text-white">{item.label}</span>
-                      <span className="ml-2 text-zinc-500">{item.description}</span>
-                    </div>
-                    <span className={item.status.text}>
-                      {item.value} · {item.status.label}
-                    </span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-                    <div
-                      className={`h-full rounded-full ${item.status.color}`}
-                      style={{ width: `${item.status.percent}%` }}
-                    />
-                  </div>
+            <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <p className="font-medium text-white">점수 구성 그래프</p>
+                  <Tooltip text="노란 구간은 위험 점수가 더해진 항목입니다. 초록 구간은 이번 로그인에서 위험 점수를 더하지 않은 항목입니다." />
                 </div>
-              ))}
+                <span className="text-sm text-zinc-500">합계 {formatNumber(botScore, "점")}</span>
+              </div>
+              <div className="flex h-5 overflow-hidden rounded-full bg-zinc-800">
+                {mouseReasons.map((item) => {
+                  const score = Math.max(Number(item.score) || 0, 0);
+                  return (
+                    <div
+                      key={item.label}
+                      className={score > 0 ? "bg-amber-400" : "bg-emerald-400/50"}
+                      style={{ width: `${Math.max(score, 6)}%` }}
+                      title={`${item.label}: +${score}점`}
+                    />
+                  );
+                })}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-400">
+                {positiveReasons.length > 0 ? positiveReasons.map((item) => (
+                  <span key={item.label} className="rounded-lg bg-amber-400/10 px-2.5 py-1 text-amber-100">
+                    {item.label} +{item.score}
+                  </span>
+                )) : (
+                  <span className="rounded-lg bg-emerald-400/10 px-2.5 py-1 text-emerald-100">
+                    위험 가산점 없음
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-3">
+              {mouseReasons.map((item) => {
+                const risky = item.score > 0;
+                return (
+                  <div key={item.label} className="rounded-xl border border-white/10 bg-zinc-950/40 p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium text-white">{item.label}</p>
+                          <Tooltip text={item.detail} />
+                        </div>
+                        <p className="mt-1 text-sm text-zinc-500">측정값 {item.value}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className={risky ? "text-amber-200" : "text-emerald-200"}>{item.result}</p>
+                        <p className="mt-1 text-sm text-zinc-500">+{item.score}점</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-800">
+                      <div
+                        className={`h-full rounded-full ${risky ? "bg-amber-400" : "bg-emerald-400"}`}
+                        style={{ width: `${item.score}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-zinc-400">판정식</span>
+                <span className="text-zinc-200">이상 기준: 60점 이상</span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-sm">
+                {mouseReasons.map((item) => (
+                  <span key={item.label} className="rounded-lg bg-zinc-900 px-3 py-1 text-zinc-300">
+                    {item.label} +{item.score}
+                  </span>
+                ))}
+                <span className="rounded-lg bg-violet-500/10 px-3 py-1 text-violet-100">
+                  합계 {formatNumber(botScore, "점")}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-white/10 bg-zinc-950/50 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <p className="font-medium text-white">이상 궤적 샘플</p>
+                  <Tooltip text="봇 점수 60점 이상으로 판정된 최근 로그인 이벤트의 마우스 좌표 샘플입니다. 전체 좌표 중 최대 80개를 저장해 화면 크기에 맞게 정규화합니다." />
+                </div>
+                <span className="text-sm text-zinc-500">{dashboard.anomalyTrajectory.length}개 점</span>
+              </div>
+              <div className="h-44 rounded-lg border border-white/5 bg-black/20 p-3">
+                {anomalyPoints.length > 1 ? (
+                  <svg viewBox="0 0 100 100" className="h-full w-full">
+                    <path d={anomalyPath} fill="none" stroke="#fbbf24" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    <circle cx={anomalyPoints[0].x} cy={anomalyPoints[0].y} r="2.5" fill="#22c55e" />
+                    <circle cx={anomalyPoints[anomalyPoints.length - 1].x} cy={anomalyPoints[anomalyPoints.length - 1].y} r="2.5" fill="#ef4444" />
+                  </svg>
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+                    아직 저장된 이상 궤적이 없습니다.
+                  </div>
+                )}
+              </div>
+              <div className="mt-2 flex items-center gap-4 text-xs text-zinc-500">
+                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />시작</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-500" />끝</span>
+              </div>
             </div>
           </div>
         </section>
 
         <section className="mt-6 grid gap-6 lg:grid-cols-[0.85fr_1.15fr]">
           <div className="rounded-2xl border border-white/10 bg-zinc-900/70 p-6">
-            <h2 className="text-xl font-semibold text-white">CAPTCHA 레벨별 결과</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-semibold text-white">CAPTCHA 레벨별 결과</h2>
+              <Tooltip text="Level 1은 Type A/B/C, Level 2는 Type D로 묶어서 통과와 실패를 비교합니다." />
+            </div>
             <p className="mt-1 text-sm text-zinc-400">Level 1은 A/B/C, Level 2는 D 기준</p>
             <div className="mt-6 space-y-5">
               {(dashboard.captchaLevels || emptyDashboard.captchaLevels).map((item) => {
@@ -298,7 +471,10 @@ export default function Dashboard() {
             </div>
 
             <div className="mt-7 border-t border-white/10 pt-5">
-              <p className="mb-4 text-sm font-medium text-zinc-300">타입별 상세</p>
+              <div className="mb-4 flex items-center gap-2">
+                <p className="text-sm font-medium text-zinc-300">타입별 상세</p>
+                <Tooltip text="각 CAPTCHA 타입별 성공/실패 수입니다. A/B/C는 Level 1, D는 Level 2에 속합니다." />
+              </div>
               <div className="space-y-4">
               {(dashboard.captchaTypes || emptyDashboard.captchaTypes).map((item) => {
                 const total = item.pass + item.fail;
@@ -327,7 +503,10 @@ export default function Dashboard() {
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-zinc-900/70 p-6">
-            <h2 className="text-xl font-semibold text-white">최근 로그인 판정</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-semibold text-white">최근 로그인 판정</h2>
+              <Tooltip text="CAPTCHA 판정과 최종 로그인 마우스 분석 이벤트를 최신순으로 보여줍니다." />
+            </div>
             <p className="mt-1 text-sm text-zinc-400">CAPTCHA 결과와 마우스 이상 탐지를 분리 표시</p>
             <div className="mt-5 overflow-x-auto rounded-xl border border-white/10">
               <table className="w-full min-w-[720px] border-collapse text-left text-sm">
@@ -367,7 +546,10 @@ export default function Dashboard() {
         <section className="mt-6 grid gap-4 md:grid-cols-4">
           {speedRows.map((item) => (
             <div key={item.label} className="rounded-2xl border border-white/10 bg-zinc-900/70 p-5">
-              <p className="text-sm text-zinc-400">{item.label}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm text-zinc-400">{item.label}</p>
+                <Tooltip text={item.detail} />
+              </div>
               <p className="mt-2 text-2xl font-semibold text-white">{item.value}</p>
               <p className="mt-2 text-xs text-zinc-500">{item.detail}</p>
             </div>
