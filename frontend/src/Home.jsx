@@ -7,6 +7,10 @@ export default function HomePage() {
     const ANSWER_TIME_LIMIT_MS = 5000;
     const MAX_TRAJECTORY_POINTS = 800;
     const MAX_CLICK_EVENTS = 120;
+    const IMAGE_DISPLAY_SECONDS = {
+        C: 5,
+        D: 3
+    };
 
     const videoRef = useRef(null);
     const [videoUrl, setVideoUrl] = useState(null);
@@ -173,7 +177,7 @@ export default function HomePage() {
             if (!response.ok || !result.success || result.isBot) {
                 setLoginError(result.message || "로그인 실패");
                 setIsLoggingIn(false);
-                alert(result.message);
+                alert(result.message || "로그인에 실패했습니다. 잠시 후 다시 시도하세요.");
                 return;
             }
 
@@ -198,13 +202,46 @@ export default function HomePage() {
         }
     };
 
-    const login = (event) => {
+    const precheckCredentials = async () => {
+        try {
+            const response = await fetch(`${API}/api/login-precheck`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                credentials: "include",
+                body: JSON.stringify({
+                    username: loginUsername,
+                    password: loginPassword
+                })
+            });
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok || !data.valid) {
+                const message = data.message || "Invalid username or password.";
+                setLoginError(message);
+                alert(message);
+                return false;
+            }
+
+            return true;
+        } catch (error) {
+            console.error("login precheck failed:", error);
+            setLoginError("Unable to verify credentials.");
+            alert("Unable to verify credentials.");
+            return false;
+        }
+    };
+
+    const login = async (event) => {
         event.preventDefault();
         setLoginError("");
 
         if (!isCaptchaPassed) {
             resetBehaviorMetrics();
             reset();
+            const credentialsValid = await precheckCredentials();
+            if (!credentialsValid) return;
             setCaptchaopen(true);
             return;
         }
@@ -271,8 +308,9 @@ export default function HomePage() {
         setType(data.type);
         setCurrentLevel(data.currentLevel || 1);
         if (data.type === "C" || data.type === "D") {
-            setDuration(5);
+            setDuration(IMAGE_DISPLAY_SECONDS[data.type]);
         }
+        setCaptchaopen(true);
         setStarted(true);
     };
 
@@ -307,7 +345,7 @@ export default function HomePage() {
             clearInterval(imgIntervalRef.current);
             imgIntervalRef.current = null;
 
-            const virtualDuration = 5;
+            const virtualDuration = IMAGE_DISPLAY_SECONDS[type];
             const currentTimeSec = t;
             setProgress(Math.min((currentTimeSec / virtualDuration) * 100, 100));
             setRemainTime(Math.min(currentTimeSec, virtualDuration));
@@ -316,9 +354,6 @@ export default function HomePage() {
         if (type !== "C" && type !== "D" && videoRef.current) {
             videoRef.current.pause();
         }
-
-        setEnded(true);
-        setEndedTime(new Date().getTime());
 
         try {
             const res = await fetch(`${API}/mvcaptcha/verify`, {
@@ -428,7 +463,7 @@ export default function HomePage() {
         }
 
         else if (type === "C" || type === "D") {
-            const virtualDuration = 5;
+            const virtualDuration = IMAGE_DISPLAY_SECONDS[type];
             const imageStartTime = new Date().getTime();
             setTimeout(() => {
                 setStartTime(imageStartTime);
@@ -650,12 +685,12 @@ export default function HomePage() {
                                         <div className="aspect-video relative overflow-hidden rounded-2xl border border-white/10 bg-zinc-950">
                                             {type === "C" || type === "D" ? (
                                                 <div className="w-full h-full bg-zinc-900 relative flex items-center justify-center">
-                                                    {started && (
+                                                    {started && (type !== "D" || !ended) && (
                                                         <img
                                                             src={`${API}${videoUrl}`}
                                                             alt="captcha"
 
-                                                            className={`w-full h-full object-cover transition-all duration-300 ${ended ? "opacity-40 filter blur-sm" : type === "C" ? "animate-move" : ""
+                                                            className={`w-full h-full object-cover transition-all duration-300 ${ended ? type === "D" ? "opacity-0" : "opacity-40 filter blur-sm" : type === "C" ? "animate-move" : ""
                                                                 }`}
                                                         />)}
                                                 </div>
@@ -756,7 +791,7 @@ export default function HomePage() {
                                                                 }
 
                                                                 
-                                                                {type !== "A" &&
+                                                                {type !== "A" && (type !== "D" || ended) &&
                                                                     options.map((item, idx) => (
                                                                         <button
                                                                             key={`option-${item}-${idx}`}
