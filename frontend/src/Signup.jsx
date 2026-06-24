@@ -43,6 +43,7 @@ export default function Signup() {
 
       const res = await fetch(`${API_URL}/send-email-code`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -89,6 +90,7 @@ export default function Signup() {
 
       const res = await fetch(`${API_URL}/verify-email-code`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -153,6 +155,7 @@ export default function Signup() {
 
       const res = await fetch(`${API_URL}/signup`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },

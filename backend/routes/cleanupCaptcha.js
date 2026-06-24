@@ -6,5 +6,6 @@ module.exports = (db) => {
             "DELETE FROM captcha WHERE created_at < ?",
             [expire]
         );
+
     }, 5000);
-};
+};};

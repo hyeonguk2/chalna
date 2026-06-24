@@ -92,34 +92,34 @@ export default function Dashboard() {
   const [recentLoading, setRecentLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+
+  const loadDashboard = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch("/api/dashboard/security", { credentials: "include" });
+      if (!res.ok) throw new Error("dashboard request failed");
+      const data = await res.json();
+      setDashboard({
+        ...emptyDashboard,
+        ...data,
+        summary: { ...emptyDashboard.summary, ...(data.summary || {}) },
+        captchaTypes: data.captchaTypes || emptyDashboard.captchaTypes,
+        captchaLevels: data.captchaLevels || emptyDashboard.captchaLevels,
+        latestMetrics: { ...emptyDashboard.latestMetrics, ...(data.latestMetrics || {}) },
+      });
+      setError("");
+      setLastUpdatedAt(Date.now());
+    } catch (err) {
+      console.error(err);
+      setError("대시보드 API에 연결할 수 없습니다.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const loadDashboard = async () => {
-      try {
-        setLoading(true);
-        const res = await fetch("/api/dashboard/security", { credentials: "include" });
-        if (!res.ok) throw new Error("dashboard request failed");
-        const data = await res.json();
-        setDashboard({
-          ...emptyDashboard,
-          ...data,
-          summary: { ...emptyDashboard.summary, ...(data.summary || {}) },
-          captchaTypes: data.captchaTypes || emptyDashboard.captchaTypes,
-          captchaLevels: data.captchaLevels || emptyDashboard.captchaLevels,
-          latestMetrics: { ...emptyDashboard.latestMetrics, ...(data.latestMetrics || {}) },
-        });
-        setError("");
-      } catch (err) {
-        console.error(err);
-        setError("대시보드 API에 연결할 수 없습니다.");
-      } finally {
-        setLoading(false);
-      }
-    };
-
     loadDashboard();
-    const timer = setInterval(loadDashboard, 10000);
-    return () => clearInterval(timer);
   }, []);
 
   const showWeekRows = async () => {
@@ -159,7 +159,7 @@ export default function Dashboard() {
   const hasLinearMse = linearMse !== null && linearMse !== undefined && Number.isFinite(Number(linearMse));
   const hasClickStd = clickHoldStd !== null && clickHoldStd !== undefined && Number.isFinite(Number(clickHoldStd));
   const trajectoryRisk = pointCount < 10;
-  const straightRisk = !trajectoryRisk && hasLinearMse && Number(linearMse) < 2;
+  const straightRisk = !trajectoryRisk && hasLinearMse && Number(linearMse) < 1.2;
   const clickRisk = hasClickStd && Number(clickHoldStd) < 5;
   const fallbackMouseReasons = [
     {
@@ -171,10 +171,10 @@ export default function Dashboard() {
     },
     {
       label: "이동 경로",
-      value: hasLinearMse ? formatNumber(linearMse) : "-",
+      value: hasLinearMse ? formatNumber(linearMse, "%") : "-",
       result: trajectoryRisk ? "검사 생략" : straightRisk ? "너무 직선적" : "자연스러움",
       score: straightRisk ? 35 : 0,
-      detail: "MSE와 직선도가 동시에 위험 기준을 넘으면 자동 생성 경로로 의심합니다.",
+      detail: "정규화된 선형성 지표와 직선도가 동시에 위험 기준을 넘으면 자동 생성 경로로 의심합니다.",
     },
     {
       label: "클릭 패턴",
@@ -190,7 +190,7 @@ export default function Dashboard() {
   const positiveReasons = mouseReasons.filter((item) => Number(item.score) > 0);
   const speedRows = [
     { label: "궤적 포인트", value: formatNumber(dashboard.latestMetrics.trajectoryPoints, "개"), detail: "최근 로그인 시도에서 수집한 마우스 좌표 수입니다. 10개 미만이면 분석 신뢰도가 낮아 일부 점수가 더해집니다." },
-    { label: "선형성 MSE", value: formatNumber(dashboard.latestMetrics.linearMse), detail: "마우스 이동이 직선 회귀선에서 얼마나 벗어났는지입니다. 낮을수록 너무 직선적인 움직임입니다." },
+    { label: "선형성 지표", value: formatNumber(dashboard.latestMetrics.linearMse, "%"), detail: "시작점과 끝점을 잇는 기준선에서 얼마나 벗어나는지 정규화한 값입니다. 낮을수록 더 직선적인 움직임입니다." },
     { label: "클릭 유지 편차", value: formatNumber(dashboard.latestMetrics.clickHoldStd, "ms"), detail: "여러 클릭의 down/up 유지 시간이 얼마나 다른지입니다. 5ms 미만이면 반복 클릭 가능성을 의심합니다." },
     { label: "최종 봇 점수", value: formatNumber(dashboard.latestMetrics.botScore, "점"), detail: "마우스 분석 항목별 점수를 합산한 값입니다. 60점 이상이면 이상 탐지로 처리됩니다." },
   ];
@@ -210,8 +210,29 @@ export default function Dashboard() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-zinc-500">
-              {loading ? "동기화 중" : error || "10초마다 갱신"}
+              {loading ? "불러오는 중" : error || (lastUpdatedAt ? `마지막 업데이트 ${new Date(lastUpdatedAt).toLocaleTimeString("ko-KR", { hour12: false })}` : "수동 업데이트")}
             </span>
+            <button
+              type="button"
+              onClick={loadDashboard}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-xl border border-violet-300/15 bg-black/20 px-4 py-2 text-sm text-violet-100 transition hover:bg-violet-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M21 12a9 9 0 1 1-3.2-6.9" />
+                <path d="M21 3v6h-6" />
+              </svg>
+              업데이트
+            </button>
             <Link
               to="/"
               className="rounded-xl border border-violet-300/15 bg-black/20 px-4 py-2 text-sm text-violet-100 transition hover:bg-violet-400/15"
@@ -294,7 +315,7 @@ export default function Dashboard() {
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-xl font-semibold text-white">마우스 이상 탐지</h2>
-                  <Tooltip text="움직임 데이터, 이동 경로, 클릭 패턴에서 더해진 점수가 60점 이상이면 이상으로 판정합니다." />
+                <Tooltip text="움직임 데이터, 정규화 선형성, 클릭 패턴에서 더해진 점수가 60점 이상이면 이상으로 판정합니다." />
                 </div>
                 <p className="mt-1 text-sm text-zinc-400">어떤 항목 때문에 점수가 더해졌는지 표시</p>
               </div>
