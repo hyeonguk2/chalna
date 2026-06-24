@@ -12,9 +12,15 @@ const app = express();
 const CODE_TTL_MS = 3 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 30 * 1000;
 
-// CORS 먼저
+const FRONT_URL = process.env.FRONT_URL || "http://localhost:5173";
+const isProduction = process.env.NODE_ENV === "production";
+
+if (process.env.TRUST_PROXY === "1") {
+    app.set("trust proxy", 1);
+}
+
 const corsOptions = {
-    origin: "http://localhost:5173",
+    origin: FRONT_URL,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true
@@ -22,17 +28,42 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// JSON 파싱
 app.use(express.json());
 
-// 세션도 라우터보다 위
+const createRateLimiter = ({ windowMs, max, keyPrefix }) => {
+    const hits = new Map();
+
+    return (req, res, next) => {
+        const now = Date.now();
+        const key = `${keyPrefix}:${req.ip}`;
+        const entry = hits.get(key);
+
+        if (!entry || entry.resetAt <= now) {
+            hits.set(key, { count: 1, resetAt: now + windowMs });
+            return next();
+        }
+
+        if (entry.count >= max) {
+            res.setHeader("Retry-After", Math.ceil((entry.resetAt - now) / 1000));
+            return res.status(429).json({ error: "too_many_requests" });
+        }
+
+        entry.count += 1;
+        return next();
+    };
+};
+
+app.use("/api/login", createRateLimiter({ windowMs: 60 * 1000, max: 10, keyPrefix: "login" }));
+app.use("/mvcaptcha/verify", createRateLimiter({ windowMs: 60 * 1000, max: 20, keyPrefix: "captcha_verify" }));
+app.use("/mvcaptcha", createRateLimiter({ windowMs: 60 * 1000, max: 30, keyPrefix: "captcha" }));
+
 app.use(session({
     secret: "your-secret-key",
     resave: false,
     saveUninitialized: false,
     cookie: {
         httpOnly: true,
-        secure: false,
+        secure: isProduction,
         sameSite: "lax"
     }
 }));
@@ -89,8 +120,10 @@ db.connect((err) => {
             email VARCHAR(100) UNIQUE,
             password VARCHAR(255),
             captchatype ENUM('A','B','C','D'),
+            captcha_level INT DEFAULT 1,
             login_attempts INT DEFAULT 0,
-            lockout_time BIGINT DEFAULT 0
+            lockout_time BIGINT DEFAULT 0,
+            lockout_count INT DEFAULT 0
         )
     `;
 
@@ -101,6 +134,21 @@ db.connect((err) => {
         }
 
         console.log("users table ready");
+
+        db.query("ALTER TABLE users ADD COLUMN captcha_level INT DEFAULT 1", (alterErr) => {
+            if (alterErr && alterErr.code !== "ER_DUP_FIELDNAME") {
+                console.log("captcha_level alter error:", alterErr);
+            }
+
+            db.query("UPDATE users SET captcha_level = 2, login_attempts = 0 WHERE login_attempts = -222");
+            db.query("UPDATE users SET captcha_level = 1, login_attempts = 0 WHERE login_attempts < 0");
+        });
+
+        db.query("ALTER TABLE users ADD COLUMN lockout_count INT DEFAULT 0", (alterErr) => {
+            if (alterErr && alterErr.code !== "ER_DUP_FIELDNAME") {
+                console.log("lockout_count alter error:", alterErr);
+            }
+        });
 
         const createVerificationTable = `
             CREATE TABLE IF NOT EXISTS email_verifications (
@@ -271,11 +319,6 @@ app.post("/signup", async (req, res) => {
         res.status(500).send("db error");
     }
 });
-
-app.use(
-    "/videos",
-    express.static(path.join(__dirname, "public/videos"))
-);
 
 app.use("/mvcaptcha", require("./routes/mvcaptcha"));
 

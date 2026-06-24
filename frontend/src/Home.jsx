@@ -6,31 +6,31 @@ export default function HomePage() {
     const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
     const ANSWER_TIME_LIMIT_MS = 5000;
 
-    //모달용
-    const videoRef = useRef(null); //영상모듈
-    const [videoUrl, setVideoUrl] = useState(null); //영상 링크 - 보안문제 해결필요!
-    const [captchaopen, setCaptchaopen] = useState(false); //모달 창 상태
-    const [started, setStarted] = useState(false); //영상 시작
-    const [ended, setEnded] = useState(false); //모달 영상 종료상태
-    const [result, setResult] = useState(null); //실패,성공 문자
-    const [endedTime, setEndedTime] = useState(null); //영상 끝난 시간
-    const [remainTime, setRemainTime] = useState(0); //영상 후 5초 타이머
-    const [progress, setProgress] = useState(0); //영상typeA 상태바
-    const imgIntervalRef = useRef(null); // ⭐️ [추가] 이미지용 가상 타이머 Ref
+    const videoRef = useRef(null);
+    const [videoUrl, setVideoUrl] = useState(null);
+    const [captchaopen, setCaptchaopen] = useState(false);
+    const [started, setStarted] = useState(false);
+    const [ended, setEnded] = useState(false);
+    const [result, setResult] = useState(null);
+    const [endedTime, setEndedTime] = useState(null);
+    const [remainTime, setRemainTime] = useState(0);
+    const [progress, setProgress] = useState(0);
+    const imgIntervalRef = useRef(null);
     const loginTransitionRef = useRef(null);
 
-    //캡챠데이터용
-    const [captchaId, setCaptchaId] = useState(null); //문제 고유id
-    const [options, setOptions] = useState([]);  //문제 선택지
-    const [guideText, setGuideText] = useState(""); //영상 위 문자
-    const [startTime, setStartTime] = useState(null); // 시작시간 
-    const [type, setType] = useState(null); // 영상 타입
+    const [captchaId, setCaptchaId] = useState(null);
+    const [options, setOptions] = useState([]);
+    const [guideText, setGuideText] = useState("");
+    const [startTime, setStartTime] = useState(null);
+    const [type, setType] = useState(null);
     const [duration, setDuration] = useState(0);
     const [currentLevel, setCurrentLevel] = useState(1);
     const [solveElapsed, setSolveElapsed] = useState(0);
     const [finalSolveTime, setFinalSolveTime] = useState(null);
-    // ⭐️ [추가] 캡차 성공 여부를 기록할 상태 변수
+
     const [isCaptchaPassed, setIsCaptchaPassed] = useState(false);
+    const [captchaToken, setCaptchaToken] = useState("");
+    const [challengeToken, setChallengeToken] = useState("");
 
     const [sessionUser, setSessionUser] = useState(null);
     const [loginUsername, setLoginUsername] = useState("");
@@ -41,13 +41,10 @@ export default function HomePage() {
 
     const formatSeconds = (value) => `${Number(value || 0).toFixed(1)}초`;
 
-    //users table 에 login_attempts 컬럼을 임시로 추가했는데 이걸 fk로 따로 테이블 만들어서 연결할지 결정필요
-    //fk로 별도로 만들면 captcha 시도횟수, 시도한 영상 제목이나 유형을 넣을 컬럼이 필요할것같아요.(같은 captcha시도 방지)
-
     useEffect(() => {
         const loadSession = async () => {
             try {
-                const res = await fetch("/api/me", {
+                const res = await fetch(`${API}/api/me`, {
                     credentials: "include"
                 });
                 if (!res.ok) {
@@ -92,7 +89,7 @@ export default function HomePage() {
         };
     }, []);
 
-    const performLogin = async () => {
+    const performLogin = async (tokenOverride = captchaToken) => {
         setIsLoggingIn(true);
         const loginData = {
             username: loginUsername,
@@ -101,15 +98,15 @@ export default function HomePage() {
             mouseTrajectory,
             clickData: []
             },
-            captchaData: {
-                answer: true
-            }
+            captchaToken: tokenOverride
         };
 
         try {
-            const response = await fetch("/api/login", {
+            const response = await fetch(`${API}/api/login`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: {
+                    "Content-Type": "application/json"
+                },
                 credentials: "include",
                 body: JSON.stringify(loginData)
             });
@@ -126,7 +123,7 @@ export default function HomePage() {
                 return;
             }
 
-            const sessionResponse = await fetch("/api/me", { credentials: "include" });
+            const sessionResponse = await fetch(`${API}/api/me`, { credentials: "include" });
             const sessionData = await sessionResponse.json();
 
             if (!sessionResponse.ok || !sessionData.authenticated || !sessionData.user) {
@@ -139,6 +136,7 @@ export default function HomePage() {
             setLoginUsername("");
             setLoginPassword("");
             setMouseTrajectory([]);
+            setCaptchaToken("");
         } catch (error) {
             console.error("login failed:", error);
             setLoginError("서버 연결 실패");
@@ -150,8 +148,8 @@ export default function HomePage() {
         event.preventDefault();
         setLoginError("");
 
-        // 로그인 버튼은 CAPTCHA 안내 화면만 열고, 실제 영상은 안내 화면의 시작 버튼으로 재생한다.
         if (!isCaptchaPassed) {
+            reset();
             setCaptchaopen(true);
             return;
         }
@@ -161,16 +159,20 @@ export default function HomePage() {
 
     const logout = async () => {
         try {
-            await fetch("/api/logout", { method: "POST", credentials: "include" });
+            await fetch(`${API}/api/logout`, {
+                method: "POST",
+                credentials: "include"
+            });
         } finally {
+            reset();
             setSessionUser(null);
             setIsCaptchaPassed(false);
+            setCaptchaToken("");
             setLoginError("");
             setIsLoggingIn(false);
         }
     };
 
-    //영상 캡차 불러오기
     const startCaptcha = async (forceType = "") => {
         reset();
         if (!loginUsername) {
@@ -184,20 +186,32 @@ export default function HomePage() {
         const res = await fetch(`${API}/mvcaptcha?${params.toString()}`);
         const data = await res.json();
 
-        // 2. 영상 요청
+        if (!res.ok) {
+            if (data.error === "locked") {
+                alert(`${data.remainingSec}초 후 다시 시도하세요.`);
+            } else {
+                alert(data.message || "캡차를 시작할 수 없습니다.");
+            }
+            return;
+        }
+
         const videoRes = await fetch(`${API}/mvcaptcha/video`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json"
+            },
             body: JSON.stringify({
                 captchaId: data.captchaId
             })
         });
         const videoData = await videoRes.json();
         setEnded(false);
-        setVideoUrl(videoData.video);   // ★ 중요
+        setVideoUrl(videoData.video);
         setGuideText(data.question);
-        setCaptchaId(data.captchaId);   // ★ 중요
-        setOptions(data.options);   // ★ 중요
+        setCaptchaId(data.captchaId);
+        setChallengeToken(data.challengeToken || "");
+        setOptions(data.options);
         setType(data.type);
         setCurrentLevel(data.currentLevel || 1);
         if (data.type === "C" || data.type === "D") {
@@ -206,85 +220,72 @@ export default function HomePage() {
         setStarted(true);
     };
 
-    // 정답 전송
     const handleAnswer = (answer) => {
         if (!startTime) return;
 
-        const answeredAt = new Date().getTime();
-        const answeredInDeadTime = 
-            ended &&
-            endedTime &&
-            answeredAt- endedTime <= 5000;
-
-        const timeDiffMs = answeredAt - startTime;
+        const timeDiffMs = new Date().getTime() - startTime;
         const t = timeDiffMs / 1000;
         setFinalSolveTime(t);
 
-        // 1. 버튼을 누른 즉시 타이머 관련 상태를 모두 초기화/종료합니다. (스쳐 지나가는 현상 방지)
         setEndedTime(null);
-        setEnded(false); // ⭐️ [추가] 이 상태를 false로 바꿔야 "X초 남음" 안내창이 즉시 닫힙니다.
-        setRemainTime(0); // ⭐️ [추가] 남은 시간도 즉시 0으로 초기화
+        setEnded(false);
+        setRemainTime(0);
 
-        // ⭐️ 이미지 타이머 정지 처리
         if (imgIntervalRef.current) {
             clearInterval(imgIntervalRef.current);
-            imgIntervalRef.current = ""; // 빈 값으로 초기화
+            imgIntervalRef.current = "";
         }
+
+        imgIntervalRef.current = null;
 
         const video = videoRef.current;
         if (video) {
             video.pause();
         }
-        console.log(t);
-
-        // 정답 전송
-        submitCaptcha(t, answer, answeredInDeadTime);
+        submitCaptcha(t, answer);
     };
 
-    //영상/이미지 캡차 검증
-    const submitCaptcha = async (t, answer, answeredInDeadTime = false) => {
-        // 1. [강제 정지] 이미지 가상 타이머 인터벌 즉시 정지 및 값 고정
+    const submitCaptcha = async (t, answer) => {
+
         if (imgIntervalRef.current) {
             clearInterval(imgIntervalRef.current);
             imgIntervalRef.current = null;
 
-            // 클릭한 시점(t) 기준으로 progress와 remainTime을 화면에 강제 고정
             const virtualDuration = 5;
             const currentTimeSec = t;
             setProgress(Math.min((currentTimeSec / virtualDuration) * 100, 100));
             setRemainTime(Math.min(currentTimeSec, virtualDuration));
         }
 
-        // 2. [강제 정지] 비디오 캡차일 경우 비디오 재생도 즉시 일시정지
         if (type !== "C" && type !== "D" && videoRef.current) {
             videoRef.current.pause();
         }
 
-        // 3. 캡챠 종료 상태 지정
         setEnded(true);
         setEndedTime(new Date().getTime());
 
-        // 4. 서버 검증 요청 수행
         try {
             const res = await fetch(`${API}/mvcaptcha/verify`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                headers: {
+                    "Content-Type": "application/json"
+                },
                 body: JSON.stringify({
-                    captchaId,
                     answer,
-                    userId: loginUsername,
                     clickTime: t,
                     type,
-                    answeredInDeadTime,
-                    solveTime: Number(t.toFixed(3))
+                    captchaId,
+                    challengeToken
                 })
             });
 
             const data = await res.json();
-            console.log(data.reason);
 
             if (data.goToLevel2 || data.reason === "d_stage_unlocked") {
                 setIsCaptchaPassed(false);
+                setCaptchaToken("");
+                setChallengeToken("");
                 setResult("d_stage");
                 loginTransitionRef.current = setTimeout(() => {
                     startCaptcha(data.nextType || "D");
@@ -294,16 +295,20 @@ export default function HomePage() {
 
             if (data.reason === "success") {
                 setIsCaptchaPassed(true);
+                setCaptchaToken(data.captchaToken || "");
+                setChallengeToken("");
                 setResult("human");
                 loginTransitionRef.current = setTimeout(() => {
                     setCaptchaopen(false);
                     setResult(null);
-                    performLogin();
+                    performLogin(data.captchaToken || "");
                 }, 1000);
                 return;
             }
 
             setIsCaptchaPassed(false);
+            setCaptchaToken("");
+            setChallengeToken("");
             setResult(data.reason || "fail");
         } catch (error) {
             console.error("검증 중 오류 발생:", error);
@@ -311,11 +316,49 @@ export default function HomePage() {
         }
     };
 
-    // ⭐️ [수정] 비디오 및 이미지 초기 실행 흐름 제어 제어
+    const abortCaptcha = async () => {
+        if (!captchaId || !challengeToken) {
+            reset();
+            setCaptchaopen(false);
+            return;
+        }
+
+        try {
+            await fetch(`${API}/mvcaptcha/verify`, {
+                method: "POST",
+                credentials: "include",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    captchaId,
+                    challengeToken,
+                    aborted: true
+                })
+            });
+        } catch (error) {
+            console.error("captcha abort failed:", error);
+        } finally {
+            reset();
+            setCaptchaopen(false);
+        }
+    };
+
+    const handleCaptchaClose = async () => {
+        if (!started || result !== null || isCaptchaPassed) {
+            reset();
+            setCaptchaopen(false);
+            return;
+        }
+
+        const confirmed = window.confirm("캡차를 닫으면 실패로 처리됩니다. 진행하시겠습니까?");
+        if (!confirmed) return;
+        await abortCaptcha();
+    };
+
     useEffect(() => {
         if (!started || !videoUrl) return;
 
-        // 1. 비디오 타입일 때 제어
         if (type !== "C" && type !== "D" && videoRef.current) {
             const url = `${API}${videoUrl}`;
             videoRef.current.src = url;
@@ -325,12 +368,11 @@ export default function HomePage() {
                 setStartTime(Date.now());
                 setSolveElapsed(0);
                 setFinalSolveTime(null);
-            }).catch(err => console.log("자동 재생 차단 또는 오류:", err));
+            }).catch(() => {});
         }
 
-        // 2. 이미지 타입('C')일 때 제어 (가상 타이머 구동)
         else if (type === "C" || type === "D") {
-            const virtualDuration = 5; // 5초 동안 이미지 활성화 및 CSS 애니메이션 진행
+            const virtualDuration = 5;
             const imageStartTime = new Date().getTime();
             setTimeout(() => {
                 setStartTime(imageStartTime);
@@ -344,19 +386,17 @@ export default function HomePage() {
 
                     const currentTimeSec = (new Date().getTime() - prevStartTime) / 1000;
 
-                    // 진행바 업데이트
                     setProgress((currentTimeSec / virtualDuration) * 100);
 
-                    // 지정된 duration에 도달했을 때 (재생 종료 상황)
                     if (currentTimeSec >= virtualDuration) {
                         clearInterval(intervalImg);
                         setEnded(true);
                         setEndedTime(new Date().getTime());
-                        setRemainTime(5); // 종료 후 정답 마킹 추가 5초 카운트다운 시작
+                        setRemainTime(5);
                     }
                     return prevStartTime;
                 });
-            }, 30); // 약 30ms 간격으로 progress 갱신 (RAF 대용)
+            }, 30);
 
             imgIntervalRef.current = intervalImg;
         }
@@ -393,10 +433,8 @@ export default function HomePage() {
         return () => clearInterval(timer);
     }, [started, startTime, result]);
 
-    // 5초 카운트다운 및 0초 도달 시 자동 실패 처리
-    // 5초 카운트다운 및 0초 도달 시 자동 실패 처리
     useEffect(() => {
-        // ⭐️endedTime이 없거나, 이미 성공/실패 결과(result)가 나왔다면 타이머를 돌리지 않음
+
         if (!endedTime || result !== null) return;
 
         const timer = setInterval(() => {
@@ -404,7 +442,7 @@ export default function HomePage() {
             const elapsed = new Date().getTime() - endedTime;
             const remain = Math.max(0, totalDuration - elapsed);
 
-            const remainSeconds = remain / 1000; // 밀리초를 초 단위로 변환
+            const remainSeconds = remain / 1000;
 
             if (remainSeconds <= 1.0) {
                 setRemainTime(remainSeconds.toFixed(1));
@@ -412,12 +450,10 @@ export default function HomePage() {
                 setRemainTime(Math.ceil(remainSeconds));
             }
 
-            // 0초에 도달했을 때
             if (remain <= 0) {
                 clearInterval(timer);
                 setEndedTime(null);
 
-                // ⭐️ 인터벌이 실행되는 순간 찰나의 타이밍에 result가 채워졌는지 다시 한번 체크
                 if (result !== null) return;
 
                 let currentVerifyTime = 0;
@@ -433,14 +469,13 @@ export default function HomePage() {
                     }
                 }
                 setFinalSolveTime(startTime ? (new Date().getTime() - startTime) / 1000 : currentVerifyTime);
-                submitCaptcha(currentVerifyTime, "", false);
+                submitCaptcha(currentVerifyTime, "");
             }
         }, 50);
 
         return () => clearInterval(timer);
-    }, [endedTime, type, duration, result, startTime]); // ⭐️ 의존성 배열에 result 추가
+    }, [endedTime, type, duration, result, startTime]);
 
-    //영상 초기화
     const reset = () => {
         if (loginTransitionRef.current) {
             clearTimeout(loginTransitionRef.current);
@@ -448,8 +483,10 @@ export default function HomePage() {
         }
 
         if (imgIntervalRef.current) {
-            clearInterval(imgIntervalRef.current); // ⭐️ 이미지 타이머 초기화 필수
+            clearInterval(imgIntervalRef.current);
         }
+
+        imgIntervalRef.current = null;
 
         const video = videoRef.current;
         if (video) {
@@ -462,9 +499,12 @@ export default function HomePage() {
         setStarted(false);
         setResult(null);
         setVideoUrl("");
+        setCaptchaId(null);
         setOptions([]);
         setGuideText("");
         setStartTime(null);
+        setType(null);
+        setDuration(0);
         setProgress(0);
         setEndedTime(null);
         setRemainTime(0);
@@ -473,7 +513,8 @@ export default function HomePage() {
         setCurrentLevel(1);
         setSolveElapsed(0);
         setFinalSolveTime(null);
-
+        setCaptchaToken("");
+        setChallengeToken("");
 
     };
     return (
@@ -535,10 +576,7 @@ export default function HomePage() {
                                                 )}
                                             </div>
                                             <button
-                                                onClick={() => {
-                                                    reset();
-                                                    setCaptchaopen(false);
-                                                }}
+                                                onClick={handleCaptchaClose}
                                                 className="rounded-xl border border-violet-300/15 bg-black/20 px-4 py-2 text-sm text-violet-100 transition hover:bg-violet-400/15"
                                             >
                                                 닫기
@@ -552,7 +590,7 @@ export default function HomePage() {
                                                         <img
                                                             src={`${API}${videoUrl}`}
                                                             alt="captcha"
-                                                            // 💡 ended가 되면 투명도를 주거나 필터를 먹여 '멈춤 효과' 비주얼을 제공할 수 있습니다.
+
                                                             className={`w-full h-full object-cover transition-all duration-300 ${ended ? "opacity-40 filter blur-sm" : type === "C" ? "animate-move" : ""
                                                                 }`}
                                                         />)}
@@ -584,14 +622,14 @@ export default function HomePage() {
                                                         </div>
                                                     </div>
                                                     <div className="absolute bottom-4 left-0 right-0 z-30 flex justify-center">
-                                                        {/* 전체 컨트롤 영역 */}
+                                                        
                                                         <div className="w-[80%] mx-auto">
 
-                                                            {/* progress bar (A만) */}
+                                                            
                                                             {type === "A" && (
                                                                 <div className="relative w-full h-2 bg-zinc-700 rounded overflow-visible mb-6">
 
-                                                                    {/* 초록 구간 + 숫자 */}
+                                                                    
                                                                     {duration > 0 &&
                                                                         options.map((time, idx) => {
                                                                             const left = (time / duration) * 100;
@@ -599,7 +637,7 @@ export default function HomePage() {
                                                                             return (
                                                                                 <div key={`options-${time}-${idx}`}>
 
-                                                                                    {/* 초록 구간 */}
+                                                                                    
                                                                                     <div
                                                                                         className="absolute top-0 h-2 bg-green-500/50 z-10"
                                                                                         style={{
@@ -608,7 +646,7 @@ export default function HomePage() {
                                                                                         }}
                                                                                     />
 
-                                                                                    {/* 숫자 */}
+                                                                                    
                                                                                     <div
                                                                                         className="absolute top-[-20px] text-xs text-white z-30"
                                                                                         style={{
@@ -622,14 +660,14 @@ export default function HomePage() {
                                                                             );
                                                                         })}
 
-                                                                    {/* 구간 선 */}
+                                                                    
                                                                     {/* <div className="absolute inset-0 flex z-20">
                                                                         {[...Array(4)].map((_, i) => (
                                                                             <div key={`slot-${i}`} className="flex-1 border-r border-zinc-300/70" />
                                                                         ))}
                                                                     </div> */}
 
-                                                                    {/* 진행바 */}
+                                                                    
                                                                     <div
                                                                         className="h-full bg-white relative z-30"
                                                                         style={{ width: `${progress}%` }}
@@ -637,10 +675,10 @@ export default function HomePage() {
                                                                 </div>
                                                             )}
 
-                                                            {/* 버튼 영역 */}
+                                                            
                                                             <div className={`grid gap-5 ${type === "D" ? "grid-cols-3" : "grid-cols-4"}`}>
 
-                                                                {/* A 타입 → 1~4 */}
+                                                                
                                                                 {type === "A" &&
                                                                     [1, 2, 3, 4].map((num) => (
                                                                         <button
@@ -653,7 +691,7 @@ export default function HomePage() {
                                                                     ))
                                                                 }
 
-                                                                {/* A 제외 → options */}
+                                                                
                                                                 {type !== "A" &&
                                                                     options.map((item, idx) => (
                                                                         <button
@@ -807,40 +845,9 @@ export default function HomePage() {
                 </div>
             </section>
 
-            {/* Demo_ 추가 페이지 틀 */}
+            
 
-            {/*<section id="demo" className="border-t border-zinc-800">
-                <div className="max-w-7xl mx-auto px-6 py-24">
-                    <div className="text-center max-w-3xl mx-auto">
-                        <h2 className="text-4xl font-bold mb-6">
-                            실시간 인터랙션 챌린지
-                        </h2>
-
-                        <p className="text-zinc-400 leading-relaxed mb-10">
-                            사용자는 영상 내 객체 이벤트에 맞춰 반응해야 합니다.
-                        </p>
-
-                        <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-10">
-                            
-                            <div className="aspect-video rounded-2xl bg-zinc-800 flex items-center justify-center mb-6">
-                                
-                                <div className="text-center">
-
-                                    <div className="text-7xl mb-4">🦴</div>
-
-                                    <p className="text-zinc-400 text-sm">
-                                        이벤트 발생 대기 중...
-                                    </p>
-                                </div>
-                            </div> 
-
-                            <button className="px-8 py-4 rounded-2xl bg-white text-black font-semibold hover:opacity-90 transition">
-                                이벤트 확인
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </section>*/}
+            
         </div>
     );
 }
