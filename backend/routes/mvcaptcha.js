@@ -126,7 +126,91 @@ db.connect((err) => {
         });
 
     });
+
+    const createSecurityEventsTable = `
+        CREATE TABLE IF NOT EXISTS security_events (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            phase ENUM('captcha','login') NOT NULL,
+            userid VARCHAR(50),
+            captcha_type CHAR(1),
+            captcha_level INT,
+            captcha_result VARCHAR(30),
+            mouse_result VARCHAR(80),
+            bot_score INT DEFAULT 0,
+            trajectory_points INT DEFAULT 0,
+            linear_mse DOUBLE,
+            click_hold_std DOUBLE,
+            click_pairs INT DEFAULT 0,
+            trajectory_sample JSON,
+            analysis_details JSON,
+            click_time DOUBLE,
+            badtime DOUBLE,
+            result VARCHAR(30) NOT NULL,
+            message VARCHAR(255),
+            created_at BIGINT NOT NULL,
+            INDEX idx_security_created_at (created_at),
+            INDEX idx_security_userid (userid),
+            INDEX idx_security_phase (phase)
+        )
+    `;
+
+    db.query(createSecurityEventsTable, (err) => {
+        if (err) {
+            console.error("security events table create error:", err);
+            return;
+        }
+
+        db.query("ALTER TABLE security_events ADD COLUMN trajectory_sample JSON AFTER click_pairs", (alterErr) => {
+            if (alterErr && alterErr.code !== "ER_DUP_FIELDNAME") {
+                console.error("security_events trajectory_sample alter error:", alterErr);
+            }
+        });
+
+        db.query("ALTER TABLE security_events ADD COLUMN analysis_details JSON AFTER trajectory_sample", (alterErr) => {
+            if (alterErr && alterErr.code !== "ER_DUP_FIELDNAME") {
+                console.error("security_events analysis_details alter error:", alterErr);
+            }
+        });
+    });
 });
+
+function recordCaptchaSecurityEvent(event) {
+    const sql = `
+        INSERT INTO security_events (
+            phase, userid, captcha_type, captcha_level, captcha_result,
+            mouse_result, bot_score, trajectory_points, linear_mse,
+            click_hold_std, click_pairs, trajectory_sample, analysis_details,
+            click_time, badtime, result, message, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    db.query(
+        sql,
+        [
+            "captcha",
+            event.userId || null,
+            event.captchaType || null,
+            event.captchaLevel || null,
+            event.captchaResult,
+            null,
+            0,
+            0,
+            null,
+            null,
+            0,
+            null,
+            null,
+            event.clickTime ?? null,
+            event.badtime ?? null,
+            event.result,
+            event.message || null,
+            Date.now(),
+        ],
+        (err) => {
+            if (err) console.error("captcha security event insert error:", err);
+        }
+    );
+}
 
 function makeAnswer() {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -443,8 +527,20 @@ router.post("/verify", async (req, res) => {
 
             const currentCaptchaLevel = Number(data.level || 1);
             const isDStage = data.captchatype === "D" || currentCaptchaLevel === 2;
+            const makeCaptchaEvent = (captchaResult, result, message, extra = {}) => ({
+                userId,
+                captchaType: data.captchatype,
+                captchaLevel: currentCaptchaLevel,
+                captchaResult,
+                clickTime: Number(clickTime),
+                badtime: Number(data.badtime),
+                result,
+                message,
+                ...extra,
+            });
 
             if (aborted === true) {
+                recordCaptchaSecurityEvent(makeCaptchaEvent("aborted", isDStage ? "fail" : "retry", "CAPTCHA aborted"));
                 db.query("DELETE FROM captcha WHERE captchaid = ?", [captchaId]);
 
                 if (isDStage) {
@@ -506,6 +602,10 @@ router.post("/verify", async (req, res) => {
                 clickTimeNum <= badtimeNum + D_STAGE_WINDOW_SEC;
 
             if (clickTimeNum + BADTIME_FAST_TOLERANCE_SEC < badtimeNum) {
+                recordCaptchaSecurityEvent(makeCaptchaEvent("too_fast", isDStage ? "fail" : "retry", "CAPTCHA too fast", {
+                    clickTime: clickTimeNum,
+                    badtime: badtimeNum,
+                }));
                 if (isDStage) {
                     db.query("SELECT login_attempts, lockout_count FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
                         const currentAttempts = Math.max(1, Number(userRows[0]?.login_attempts || 0));
@@ -563,6 +663,10 @@ router.post("/verify", async (req, res) => {
             if (String(answer) === data.answer) {
 
                 if (isDStage) {
+                    recordCaptchaSecurityEvent(makeCaptchaEvent("success", "success", "CAPTCHA success", {
+                        clickTime: clickTimeNum,
+                        badtime: badtimeNum,
+                    }));
                     const passToken = await storeCaptchaPass(userId).catch((passErr) => {
                         console.error("Captcha pass store error:", passErr);
                         return null;
@@ -583,6 +687,10 @@ router.post("/verify", async (req, res) => {
                 }
 
                 else if (shouldEnterDStage) {
+                    recordCaptchaSecurityEvent(makeCaptchaEvent("d_stage_unlocked", "retry", "CAPTCHA D stage unlocked", {
+                        clickTime: clickTimeNum,
+                        badtime: badtimeNum,
+                    }));
 
                     db.query(
                         "UPDATE users SET login_attempts = GREATEST(COALESCE(login_attempts, 0), 0) + 1, captchatype = NULL, captcha_level = 2, lockout_time = 0 WHERE userid = ?",
@@ -597,6 +705,10 @@ router.post("/verify", async (req, res) => {
                 }
 
                 else {
+                    recordCaptchaSecurityEvent(makeCaptchaEvent("success", "success", "CAPTCHA success", {
+                        clickTime: clickTimeNum,
+                        badtime: badtimeNum,
+                    }));
                     const passToken = await storeCaptchaPass(userId).catch((passErr) => {
                         console.error("Captcha pass store error:", passErr);
                         return null;
@@ -616,6 +728,10 @@ router.post("/verify", async (req, res) => {
                     );
                 }
             } else {
+                recordCaptchaSecurityEvent(makeCaptchaEvent(failReason, isDStage ? "fail" : "retry", "CAPTCHA fail", {
+                    clickTime: clickTimeNum,
+                    badtime: badtimeNum,
+                }));
                 if (isDStage) {
 
                     db.query(
