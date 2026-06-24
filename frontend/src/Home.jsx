@@ -5,6 +5,8 @@ import "./App.css";
 export default function HomePage() {
     const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
     const ANSWER_TIME_LIMIT_MS = 5000;
+    const MAX_TRAJECTORY_POINTS = 800;
+    const MAX_CLICK_EVENTS = 120;
     const IMAGE_DISPLAY_SECONDS = {
         C: 5,
         D: 3
@@ -21,6 +23,10 @@ export default function HomePage() {
     const [progress, setProgress] = useState(0);
     const imgIntervalRef = useRef(null);
     const loginTransitionRef = useRef(null);
+    const behaviorMetricsRef = useRef({
+        mouseTrajectory: [],
+        clickData: []
+    });
 
     const [captchaId, setCaptchaId] = useState(null);
     const [options, setOptions] = useState([]);
@@ -40,10 +46,19 @@ export default function HomePage() {
     const [loginUsername, setLoginUsername] = useState("");
     const [loginPassword, setLoginPassword] = useState("");
     const [mouseTrajectory, setMouseTrajectory] = useState([]);
+    const [clickData, setClickData] = useState([]);
     const [loginError, setLoginError] = useState("");
     const [isLoggingIn, setIsLoggingIn] = useState(false);
 
     const formatSeconds = (value) => `${Number(value || 0).toFixed(1)}초`;
+    const resetBehaviorMetrics = () => {
+        behaviorMetricsRef.current = {
+            mouseTrajectory: [],
+            clickData: []
+        };
+        setMouseTrajectory([]);
+        setClickData([]);
+    };
 
     useEffect(() => {
         const loadSession = async () => {
@@ -76,31 +91,70 @@ export default function HomePage() {
         const handleMouseMove = (event) => {
             const now = Date.now();
             if (now - lastLoggedTime > 30) {
-                setMouseTrajectory((prev) => [
-                    ...prev,
-                    {
-                        x: event.clientX,
-                        y: event.clientY,
-                        t: now
-                    }
-                ]);
+                setMouseTrajectory((prev) => {
+                    const next = [
+                        ...prev.slice(-(MAX_TRAJECTORY_POINTS - 1)),
+                        {
+                            x: event.clientX,
+                            y: event.clientY,
+                            t: now
+                        }
+                    ];
+                    behaviorMetricsRef.current.mouseTrajectory = next;
+                    return next;
+                });
                 lastLoggedTime = now;
             }
         };
+        const handleMouseDown = (event) => {
+            setClickData((prev) => {
+                const next = [
+                    ...prev.slice(-(MAX_CLICK_EVENTS - 1)),
+                    {
+                        type: "down",
+                        x: event.clientX,
+                        y: event.clientY,
+                        t: Date.now()
+                    }
+                ];
+                behaviorMetricsRef.current.clickData = next;
+                return next;
+            });
+        };
+        const handleMouseUp = (event) => {
+            setClickData((prev) => {
+                const next = [
+                    ...prev.slice(-(MAX_CLICK_EVENTS - 1)),
+                    {
+                        type: "up",
+                        x: event.clientX,
+                        y: event.clientY,
+                        t: Date.now()
+                    }
+                ];
+                behaviorMetricsRef.current.clickData = next;
+                return next;
+            });
+        };
         window.addEventListener("mousemove", handleMouseMove);
+        window.addEventListener("mousedown", handleMouseDown);
+        window.addEventListener("mouseup", handleMouseUp);
         return () => {
             window.removeEventListener("mousemove", handleMouseMove);
+            window.removeEventListener("mousedown", handleMouseDown);
+            window.removeEventListener("mouseup", handleMouseUp);
         };
     }, []);
 
     const performLogin = async (tokenOverride = captchaToken) => {
         setIsLoggingIn(true);
+        const latestBehaviorMetrics = behaviorMetricsRef.current;
         const loginData = {
             username: loginUsername,
             password: loginPassword,
             behaviorMetrics: {
-            mouseTrajectory,
-            clickData: []
+                mouseTrajectory: latestBehaviorMetrics.mouseTrajectory,
+                clickData: latestBehaviorMetrics.clickData
             },
             captchaToken: tokenOverride
         };
@@ -139,7 +193,7 @@ export default function HomePage() {
             setSessionUser(sessionData.user);
             setLoginUsername("");
             setLoginPassword("");
-            setMouseTrajectory([]);
+            resetBehaviorMetrics();
             setCaptchaToken("");
         } catch (error) {
             console.error("login failed:", error);
@@ -184,6 +238,7 @@ export default function HomePage() {
         setLoginError("");
 
         if (!isCaptchaPassed) {
+            resetBehaviorMetrics();
             reset();
             const credentialsValid = await precheckCredentials();
             if (!credentialsValid) return;
@@ -207,6 +262,7 @@ export default function HomePage() {
             setCaptchaToken("");
             setLoginError("");
             setIsLoggingIn(false);
+            resetBehaviorMetrics();
         }
     };
 
@@ -563,13 +619,21 @@ export default function HomePage() {
                     </h1>
                     <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-300">
                         {sessionUser ? (
-                            <button
-                                type="button"
-                                onClick={logout}
-                                className="px-4 py-2 rounded bg-zinc-800 hover:bg-zinc-700 text-white transition"
-                            >
-                                로그아웃
-                            </button>
+                            <>
+                                <Link
+                                    to="/dashboard"
+                                    className="px-4 py-2 rounded border border-violet-300/20 bg-violet-500/10 text-violet-100 transition hover:bg-violet-500/20"
+                                >
+                                    대시보드
+                                </Link>
+                                <button
+                                    type="button"
+                                    onClick={logout}
+                                    className="px-4 py-2 rounded bg-zinc-800 hover:bg-zinc-700 text-white transition"
+                                >
+                                    로그아웃
+                                </button>
+                            </>
                         ) : null}
                     </div>
                 </div>
