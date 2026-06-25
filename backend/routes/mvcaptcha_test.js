@@ -72,9 +72,32 @@ const calculateStdDev = (values) => {
     return Math.sqrt(variance);
 };
 
+const calculateMean = (values) => {
+    if (!Array.isArray(values) || values.length === 0) return 0;
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+};
+
+const getDistance = (a, b) => {
+    const dx = Number(b.x) - Number(a.x);
+    const dy = Number(b.y) - Number(a.y);
+    return Math.sqrt((dx * dx) + (dy * dy));
+};
+
+const getPointToLineDistance = (point, lineStart, lineEnd) => {
+    const x0 = Number(point.x);
+    const y0 = Number(point.y);
+    const x1 = Number(lineStart.x);
+    const y1 = Number(lineStart.y);
+    const x2 = Number(lineEnd.x);
+    const y2 = Number(lineEnd.y);
+    const numerator = Math.abs((y2 - y1) * x0 - (x2 - x1) * y0 + x2 * y1 - y2 * x1);
+    const denominator = Math.max(Math.sqrt(Math.pow(y2 - y1, 2) + Math.pow(x2 - x1, 2)), 1);
+    return numerator / denominator;
+};
+
 const getClickStats = (clickData = []) => {
     if (!Array.isArray(clickData)) {
-        return { clickHoldStd: null, clickPairs: 0 };
+        return { clickHoldStd: null, clickPairs: 0, holdTimes: [] };
     }
 
     const holdTimes = [];
@@ -91,6 +114,7 @@ const getClickStats = (clickData = []) => {
     return {
         clickHoldStd: holdTimes.length > 0 ? calculateStdDev(holdTimes) : null,
         clickPairs: holdTimes.length,
+        holdTimes,
     };
 };
 
@@ -112,13 +136,89 @@ const summarizeBehaviorMetrics = (metrics = {}) => {
     const mouseTrajectory = Array.isArray(metrics.mouseTrajectory) ? metrics.mouseTrajectory : [];
     const clickData = Array.isArray(metrics.clickData) ? metrics.clickData : [];
     const clickStats = getClickStats(clickData);
+    const details = [];
+    let botScore = 0;
+    let mouseResult = "CAPTCHA mouse normal";
+    let linearMse = null;
+
+    if (mouseTrajectory.length === 0) {
+        botScore += 35;
+        mouseResult = "No CAPTCHA mouse data";
+        details.push({ label: "trajectory", result: "missing", score: 35 });
+    } else if (mouseTrajectory.length < 10) {
+        botScore += 20;
+        mouseResult = "CAPTCHA mouse trajectory too short";
+        details.push({ label: "trajectory", result: "too_short", score: 20 });
+    } else {
+        const xStdDev = calculateStdDev(mouseTrajectory.map((point) => Number(point.x)));
+        const yStdDev = calculateStdDev(mouseTrajectory.map((point) => Number(point.y)));
+
+        if (xStdDev === 0 && yStdDev === 0) {
+            botScore += 35;
+            mouseResult = "CAPTCHA mouse fixed coordinates";
+            details.push({ label: "trajectory", result: "fixed_coordinates", score: 35 });
+        } else {
+            let totalDistance = 0;
+            const speeds = [];
+
+            for (let i = 1; i < mouseTrajectory.length; i++) {
+                const distance = getDistance(mouseTrajectory[i - 1], mouseTrajectory[i]);
+                const elapsed = Math.max(Number(mouseTrajectory[i].t) - Number(mouseTrajectory[i - 1].t), 1);
+                totalDistance += distance;
+                speeds.push(distance / elapsed);
+            }
+
+            const directDistance = getDistance(mouseTrajectory[0], mouseTrajectory[mouseTrajectory.length - 1]);
+            const straightness = totalDistance > 0 ? directDistance / totalDistance : 0;
+            const baseline = Math.max(directDistance, 1);
+            const squaredDeviationSum = mouseTrajectory.reduce((sum, point) => (
+                sum + Math.pow(getPointToLineDistance(point, mouseTrajectory[0], mouseTrajectory[mouseTrajectory.length - 1]), 2)
+            ), 0);
+            const rmsDeviation = Math.sqrt(squaredDeviationSum / mouseTrajectory.length);
+            linearMse = Number.isFinite((rmsDeviation / baseline) * 100)
+                ? (rmsDeviation / baseline) * 100
+                : null;
+
+            if (linearMse !== null && linearMse < 1.2 && straightness > 0.985 && totalDistance > 100) {
+                botScore += 35;
+                mouseResult = "CAPTCHA mouse too linear";
+                details.push({ label: "trajectory", result: "too_linear", score: 35 });
+            }
+
+            const meanSpeed = calculateMean(speeds);
+            const speedStdDev = calculateStdDev(speeds);
+            const speedCv = meanSpeed > 0 ? speedStdDev / meanSpeed : null;
+
+            if (speedCv !== null && speedCv < 0.15 && speeds.length >= 10) {
+                botScore += 20;
+                mouseResult = mouseResult === "CAPTCHA mouse normal"
+                    ? "CAPTCHA mouse uniform speed"
+                    : `${mouseResult}, uniform speed`;
+                details.push({ label: "speed", result: "too_uniform", score: 20 });
+            }
+        }
+    }
+
+    if (clickStats.clickPairs === 0) {
+        botScore += 10;
+        details.push({ label: "click", result: "no_click_pairs", score: 10 });
+    } else if (clickStats.clickPairs >= 2 && clickStats.clickHoldStd !== null && clickStats.clickHoldStd < 5.0) {
+        botScore += 25;
+        mouseResult = mouseResult === "CAPTCHA mouse normal"
+            ? "CAPTCHA click timing too uniform"
+            : `${mouseResult}, click timing too uniform`;
+        details.push({ label: "click", result: "too_uniform", score: 25 });
+    }
 
     return {
-        mouseResult: mouseTrajectory.length > 0 ? "CAPTCHA mouse tracked" : "No CAPTCHA mouse data",
+        botScore,
+        mouseResult,
         trajectoryPoints: mouseTrajectory.length,
+        linearMse,
         clickHoldStd: clickStats.clickHoldStd,
         clickPairs: clickStats.clickPairs,
         trajectorySample: sampleTrajectory(mouseTrajectory),
+        analysisDetails: details,
     };
 };
 
@@ -141,13 +241,13 @@ function recordCaptchaSecurityEvent(event) {
             event.captchaLevel || null,
             event.captchaResult,
             event.mouseResult || null,
-            0,
+            event.botScore || 0,
             event.trajectoryPoints || 0,
-            null,
+            event.linearMse ?? null,
             event.clickHoldStd ?? null,
             event.clickPairs || 0,
             event.trajectorySample ? JSON.stringify(event.trajectorySample) : null,
-            null,
+            event.analysisDetails ? JSON.stringify(event.analysisDetails) : null,
             event.clickTime ?? null,
             event.badtime ?? null,
             event.result,
@@ -361,10 +461,13 @@ router.post("/verify", async (req, res) => {
         captchaLevel: challenge.captchaType === "D" ? 2 : 1,
         captchaResult,
         mouseResult: behaviorSummary.mouseResult,
+        botScore: behaviorSummary.botScore,
         trajectoryPoints: behaviorSummary.trajectoryPoints,
+        linearMse: behaviorSummary.linearMse,
         clickHoldStd: behaviorSummary.clickHoldStd,
         clickPairs: behaviorSummary.clickPairs,
         trajectorySample: behaviorSummary.trajectorySample,
+        analysisDetails: behaviorSummary.analysisDetails,
         clickTime: Number(clickTime),
         badtime: Number(challenge.badtime),
         result,
