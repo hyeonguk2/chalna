@@ -361,6 +361,7 @@ export default function HomePage() {
         }
 
         try {
+            const latestBehaviorMetrics = behaviorMetricsRef.current;
             const res = await fetch(`${API}/mvcaptcha/verify`, {
                 method: "POST",
                 credentials: "include",
@@ -372,7 +373,11 @@ export default function HomePage() {
                     clickTime: t,
                     type,
                     captchaId,
-                    challengeToken
+                    challengeToken,
+                    behaviorMetrics: {
+                        mouseTrajectory: latestBehaviorMetrics.mouseTrajectory,
+                        clickData: latestBehaviorMetrics.clickData
+                    }
                 })
             });
 
@@ -433,6 +438,7 @@ export default function HomePage() {
         }
 
         try {
+            const latestBehaviorMetrics = behaviorMetricsRef.current;
             await fetch(`${API}/mvcaptcha/verify`, {
                 method: "POST",
                 credentials: "include",
@@ -442,7 +448,11 @@ export default function HomePage() {
                 body: JSON.stringify({
                     captchaId,
                     challengeToken,
-                    aborted: true
+                    aborted: true,
+                    behaviorMetrics: {
+                        mouseTrajectory: latestBehaviorMetrics.mouseTrajectory,
+                        clickData: latestBehaviorMetrics.clickData
+                    }
                 })
             });
         } catch (error) {

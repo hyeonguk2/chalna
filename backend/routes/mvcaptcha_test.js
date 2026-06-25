@@ -2,6 +2,7 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const mysql = require("mysql2");
 const { createClient } = require("redis");
 const path = require("path");
 const fs = require("fs");
@@ -49,6 +50,115 @@ const getRedisClient = async () => {
 };
 
 const getCaptchaPassKey = (token) => `captcha_pass:${token}`;
+
+const db = mysql.createConnection({
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME
+});
+
+db.connect((err) => {
+    if (err) {
+        console.error("CAPTCHA test DB connect error:", err);
+    }
+});
+
+const calculateStdDev = (values) => {
+    if (!Array.isArray(values) || values.length === 0) return null;
+
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const variance = values.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / values.length;
+    return Math.sqrt(variance);
+};
+
+const getClickStats = (clickData = []) => {
+    if (!Array.isArray(clickData)) {
+        return { clickHoldStd: null, clickPairs: 0 };
+    }
+
+    const holdTimes = [];
+
+    for (let i = 0; i < clickData.length - 1; i++) {
+        const current = clickData[i];
+        const next = clickData[i + 1];
+
+        if (current?.type === "down" && next?.type === "up") {
+            holdTimes.push(Number(next.t) - Number(current.t));
+        }
+    }
+
+    return {
+        clickHoldStd: holdTimes.length > 0 ? calculateStdDev(holdTimes) : null,
+        clickPairs: holdTimes.length,
+    };
+};
+
+const sampleTrajectory = (trajectory = [], maxPoints = 80) => {
+    if (!Array.isArray(trajectory) || trajectory.length === 0) return [];
+
+    const step = Math.max(1, Math.ceil(trajectory.length / maxPoints));
+    return trajectory
+        .filter((_, index) => index % step === 0)
+        .slice(0, maxPoints)
+        .map((point) => ({
+            x: Number(point.x) || 0,
+            y: Number(point.y) || 0,
+            t: Number(point.t) || 0,
+        }));
+};
+
+const summarizeBehaviorMetrics = (metrics = {}) => {
+    const mouseTrajectory = Array.isArray(metrics.mouseTrajectory) ? metrics.mouseTrajectory : [];
+    const clickData = Array.isArray(metrics.clickData) ? metrics.clickData : [];
+    const clickStats = getClickStats(clickData);
+
+    return {
+        mouseResult: mouseTrajectory.length > 0 ? "CAPTCHA mouse tracked" : "No CAPTCHA mouse data",
+        trajectoryPoints: mouseTrajectory.length,
+        clickHoldStd: clickStats.clickHoldStd,
+        clickPairs: clickStats.clickPairs,
+        trajectorySample: sampleTrajectory(mouseTrajectory),
+    };
+};
+
+function recordCaptchaSecurityEvent(event) {
+    const sql = `
+        INSERT INTO security_events (
+            phase, userid, captcha_type, captcha_level, captcha_result,
+            mouse_result, bot_score, trajectory_points, linear_mse,
+            click_hold_std, click_pairs, trajectory_sample, analysis_details,
+            click_time, badtime, result, message, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    db.query(
+        sql,
+        [
+            "captcha",
+            event.userId || null,
+            event.captchaType || null,
+            event.captchaLevel || null,
+            event.captchaResult,
+            event.mouseResult || null,
+            0,
+            event.trajectoryPoints || 0,
+            null,
+            event.clickHoldStd ?? null,
+            event.clickPairs || 0,
+            event.trajectorySample ? JSON.stringify(event.trajectorySample) : null,
+            null,
+            event.clickTime ?? null,
+            event.badtime ?? null,
+            event.result,
+            event.message || null,
+            Date.now(),
+        ],
+        (err) => {
+            if (err) console.error("CAPTCHA test security event insert error:", err);
+        }
+    );
+}
 
 const storeCaptchaPass = async (userId) => {
     const token = crypto.randomBytes(32).toString("hex");
@@ -236,7 +346,7 @@ router.get("/asset/:captchaType/:assetName", (req, res) => {
 });
 
 router.post("/verify", async (req, res) => {
-    const { captchaId, challengeToken, answer } = req.body;
+    const { captchaId, challengeToken, answer, clickTime, aborted, behaviorMetrics } = req.body;
     const challenge = challengeStore.get(challengeToken);
 
     if (!captchaId || !challengeToken || !challenge || challenge.captchaId !== captchaId) {
@@ -244,9 +354,37 @@ router.post("/verify", async (req, res) => {
     }
 
     challengeStore.delete(challengeToken);
+    const behaviorSummary = summarizeBehaviorMetrics(behaviorMetrics);
+    const makeCaptchaEvent = (captchaResult, result, message) => ({
+        userId: challenge.userId,
+        captchaType: challenge.captchaType,
+        captchaLevel: challenge.captchaType === "D" ? 2 : 1,
+        captchaResult,
+        mouseResult: behaviorSummary.mouseResult,
+        trajectoryPoints: behaviorSummary.trajectoryPoints,
+        clickHoldStd: behaviorSummary.clickHoldStd,
+        clickPairs: behaviorSummary.clickPairs,
+        trajectorySample: behaviorSummary.trajectorySample,
+        clickTime: Number(clickTime),
+        badtime: Number(challenge.badtime),
+        result,
+        message,
+    });
+
+    if (aborted === true) {
+        recordCaptchaSecurityEvent(makeCaptchaEvent("aborted", "retry", "CAPTCHA test aborted"));
+        return res.json({
+            ok: false,
+            reason: "aborted",
+            testAnswer: challenge.answer,
+            testAsset: challenge.assetName,
+        });
+    }
+
     const ok = String(answer) === String(challenge.answer);
 
     if (!ok) {
+        recordCaptchaSecurityEvent(makeCaptchaEvent("fail", "retry", "CAPTCHA test fail"));
         return res.json({
             ok: false,
             reason: "fail",
@@ -256,6 +394,7 @@ router.post("/verify", async (req, res) => {
     }
 
     if (!challenge.userId) {
+        recordCaptchaSecurityEvent(makeCaptchaEvent("success", "fail", "CAPTCHA test missing user"));
         return res.status(400).json({
             ok: false,
             reason: "missing_user",
@@ -277,6 +416,8 @@ router.post("/verify", async (req, res) => {
             testAsset: challenge.assetName,
         });
     }
+
+    recordCaptchaSecurityEvent(makeCaptchaEvent("success", "success", "CAPTCHA test success"));
 
     return res.json({
         ok: true,
