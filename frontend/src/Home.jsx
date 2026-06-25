@@ -263,7 +263,7 @@ export default function HomePage() {
         if (forceType) params.set("forceType", forceType);
 
         const res = await fetch(`${API}/mvcaptcha?${params.toString()}`);
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
 
         if (!res.ok) {
             if (data.error === "locked") {
@@ -284,7 +284,17 @@ export default function HomePage() {
                 captchaId: data.captchaId
             })
         });
+        if (!videoRes.ok) {
+            alert("캡차 영상을 불러오지 못했습니다. 다시 시도하세요.");
+            return;
+        }
+
         const videoData = await videoRes.json();
+        if (!videoData.video) {
+            alert("캡차 영상 정보가 올바르지 않습니다. 다시 시도하세요.");
+            return;
+        }
+
         setEnded(false);
         setVideoUrl(videoData.video);
         setGuideText(data.question);

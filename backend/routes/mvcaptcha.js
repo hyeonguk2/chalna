@@ -228,6 +228,44 @@ function shuffle(array) {
     }
 }
 
+function getCaptchaAssetPath(captchaType, assetName) {
+    const assetKind = captchaType === "C" || captchaType === "D" ? "img" : "video";
+    const assetExt = assetKind === "img" ? "png" : "mp4";
+
+    return path.join(
+        __dirname,
+        "..",
+        "public",
+        "videos",
+        "captchatype",
+        `captchatype_${captchaType}`,
+        assetKind,
+        `${assetName}.${assetExt}`
+    );
+}
+
+function hasAvailableCaptchaAssets(captchaTypeDir, captchaTypeFolder, targetLevel2) {
+    const captchaType = captchaTypeFolder.replace("captchatype_", "");
+    const metaPath = path.join(captchaTypeDir, captchaTypeFolder, "meta.json");
+
+    if (!fs.existsSync(metaPath)) return false;
+
+    try {
+        const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+
+        return Object.keys(meta).some((key) => {
+            const isActive = meta[key]?.active === true;
+            const captchaLevel = Number(meta[key]?.level || 1);
+            const matchesLevel = targetLevel2 ? captchaLevel === 2 : captchaLevel !== 2;
+
+            return isActive && matchesLevel && fs.existsSync(getCaptchaAssetPath(captchaType, key));
+        });
+    } catch (err) {
+        console.error("CAPTCHA meta read error:", err);
+        return false;
+    }
+}
+
 router.get("/", async (req, res) => {
     const { userId, forceType } = req.query;
     const id = uuidv4();
@@ -337,6 +375,10 @@ router.get("/", async (req, res) => {
         }
     }
 
+    captchaTypes = captchaTypes.filter((file) =>
+        hasAvailableCaptchaAssets(captchaTypeDir, file, isUserTargetLevel2)
+    );
+
     if (captchaTypes.length === 0) {
         return res.status(404).send("no available captcha types");
     }
@@ -353,21 +395,25 @@ router.get("/", async (req, res) => {
     const videos = Object.keys(meta).filter(key => {
         const isActive = meta[key]?.active === true;
         const videoLevel = Number(meta[key]?.level || 1);
+        const hasAsset = fs.existsSync(getCaptchaAssetPath(captchaType, key));
 
         if (isUserTargetLevel2) {
-            return isActive && videoLevel === 2;
+            return isActive && hasAsset && videoLevel === 2;
         } else {
-            return isActive && videoLevel !== 2;
+            return isActive && hasAsset && videoLevel !== 2;
         }
     });
 
     let finalVideos = videos;
     if (finalVideos.length === 0) {
-        finalVideos = Object.keys(meta).filter(key => meta[key]?.active === true);
+        finalVideos = Object.keys(meta).filter(key => (
+            meta[key]?.active === true &&
+            fs.existsSync(getCaptchaAssetPath(captchaType, key))
+        ));
     }
 
     if (finalVideos.length === 0) {
-        return res.status(404).send("no available video folders");
+        return res.status(404).send("no available captcha assets");
     }
 
     const randomVideo = finalVideos[Math.floor(Math.random() * finalVideos.length)];
@@ -394,18 +440,25 @@ router.get("/", async (req, res) => {
 
     const createdAt = Date.now();
 
-    db.query(
-        "INSERT INTO captcha (captchaid, answer, badtime, video, level, captchatype, userid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [id, answer, badtime, randomVideo, level, captchaType, userId, createdAt],
-        (insErr) => {
-            if (insErr) console.error("캡차 데이터 삽입 실패:", insErr);
-        }
-    );
-
     const challengeToken = crypto.randomBytes(32).toString("hex");
-    await setChallenge({ challengeToken, captchaId: id, userId }).catch((challengeErr) => {
-        console.error("Challenge store error:", challengeErr);
-    });
+
+    try {
+        await new Promise((resolve, reject) => {
+            db.query(
+                "INSERT INTO captcha (captchaid, answer, badtime, video, level, captchatype, userid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [id, answer, badtime, randomVideo, level, captchaType, userId, createdAt],
+                (insErr) => {
+                    if (insErr) reject(insErr);
+                    else resolve();
+                }
+            );
+        });
+
+        await setChallenge({ challengeToken, captchaId: id, userId });
+    } catch (err) {
+        console.error("CAPTCHA create error:", err);
+        return res.status(500).json({ error: "server_error", message: "CAPTCHA creation failed" });
+    }
 
     res.json({
         captchaId: id,
@@ -429,11 +482,31 @@ router.post("/video", (req, res) => {
             }
 
             const data = rows[0];
+            if (!fs.existsSync(getCaptchaAssetPath(data.captchatype, data.video))) {
+                return res.status(404).json({ error: "asset_not_found" });
+            }
+
             res.json({
-                video: `/mvcaptcha/asset/${data.captchaid}`
+                video: `/mvcaptcha/asset/${data.captchatype}/${data.video}`
             });
         }
     );
+});
+
+router.get("/asset/:captchaType/:assetName", (req, res) => {
+    const { captchaType, assetName } = req.params;
+
+    if (!["A", "B", "C", "D"].includes(captchaType) || !/^[a-zA-Z0-9_-]+$/.test(assetName)) {
+        return res.status(400).send("invalid_asset");
+    }
+
+    const assetPath = getCaptchaAssetPath(captchaType, assetName);
+
+    if (!fs.existsSync(assetPath)) {
+        return res.status(404).send("asset_not_found");
+    }
+
+    res.sendFile(assetPath);
 });
 
 router.get("/asset/:captchaId", (req, res) => {
