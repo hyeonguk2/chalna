@@ -14,7 +14,6 @@ const LOCKOUT_DURATIONS_MS = [
     30 * 60 * 1000,
 ];
 const CAPTCHA_PASS_TTL_SECONDS = 2 * 60;
-const BADTIME_FAST_TOLERANCE_SEC = 0.15;
 const D_STAGE_WINDOW_SEC = Number(process.env.D_STAGE_WINDOW_SEC || 0.5);
 const CHALLENGE_TTL_SECONDS = 5 * 60;
 const CAPTCHA_START_RATE_LIMIT_WINDOW_SECONDS = 60;
@@ -50,13 +49,19 @@ const getRedisClient = async () => {
 const getCaptchaPassKey = (token) => `captcha_pass:${token}`;
 const getChallengeKey = (token) => `captcha_challenge:${token}`;
 
-const setChallenge = async ({ challengeToken, captchaId, userId }) => {
+const setChallenge = async (challengeToken, challengeData) => {
     const client = await getRedisClient();
     await client.set(
         getChallengeKey(challengeToken),
-        JSON.stringify({ captchaId, userId, createdAt: Date.now() }),
+        JSON.stringify(challengeData),
         { EX: CHALLENGE_TTL_SECONDS }
     );
+};
+
+const getChallenge = async (challengeToken) => {
+    const client = await getRedisClient();
+    const raw = await client.get(getChallengeKey(challengeToken));
+    return raw ? JSON.parse(raw) : null;
 };
 
 const consumeChallenge = async (challengeToken) => {
@@ -99,33 +104,6 @@ db.connect((err) => {
         console.error("DB connect error:", err);
         return;
     }
-
-    const createTable = `
-        CREATE TABLE IF NOT EXISTS captcha (
-            captchaid VARCHAR(100) PRIMARY KEY,
-            answer VARCHAR(10),
-            badtime DECIMAL(3,1),
-            video VARCHAR(100),
-            level INT,
-            captchatype CHAR(1),
-            userid VARCHAR(50),
-            created_at BIGINT
-        )
-    `;
-
-    db.query(createTable, (err) => {
-        if (err) {
-            console.error("table create error:", err);
-            return;
-        }
-
-        db.query("ALTER TABLE captcha ADD COLUMN userid VARCHAR(50)", (alterErr) => {
-            if (alterErr && alterErr.code !== "ER_DUP_FIELDNAME") {
-                console.error("captcha userid alter error:", alterErr);
-            }
-        });
-
-    });
 
     const createSecurityEventsTable = `
         CREATE TABLE IF NOT EXISTS security_events (
@@ -228,6 +206,44 @@ function shuffle(array) {
     }
 }
 
+function getCaptchaAssetPath(captchaType, assetName) {
+    const assetKind = captchaType === "C" || captchaType === "D" ? "img" : "video";
+    const assetExt = assetKind === "img" ? "png" : "mp4";
+
+    return path.join(
+        __dirname,
+        "..",
+        "public",
+        "videos",
+        "captchatype",
+        `captchatype_${captchaType}`,
+        assetKind,
+        `${assetName}.${assetExt}`
+    );
+}
+
+function hasAvailableCaptchaAssets(captchaTypeDir, captchaTypeFolder, targetLevel2) {
+    const captchaType = captchaTypeFolder.replace("captchatype_", "");
+    const metaPath = path.join(captchaTypeDir, captchaTypeFolder, "meta.json");
+
+    if (!fs.existsSync(metaPath)) return false;
+
+    try {
+        const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+
+        return Object.keys(meta).some((key) => {
+            const isActive = meta[key]?.active === true;
+            const captchaLevel = Number(meta[key]?.level || 1);
+            const matchesLevel = targetLevel2 ? captchaLevel === 2 : captchaLevel !== 2;
+
+            return isActive && matchesLevel && fs.existsSync(getCaptchaAssetPath(captchaType, key));
+        });
+    } catch (err) {
+        console.error("CAPTCHA meta read error:", err);
+        return false;
+    }
+}
+
 router.get("/", async (req, res) => {
     const { userId, forceType } = req.query;
     const id = uuidv4();
@@ -235,6 +251,8 @@ router.get("/", async (req, res) => {
     if (!userId) {
         return res.status(400).json({ error: "invalid_request" });
     }
+
+    req.session.captchaStartedAt = Date.now();
 
     const startLimitKey = `rl:captcha_start:${req.ip}:${userId}`;
     const startAllowed = await recordRateLimit(startLimitKey, CAPTCHA_START_RATE_LIMIT_MAX, CAPTCHA_START_RATE_LIMIT_WINDOW_SECONDS).catch(() => false);
@@ -337,6 +355,10 @@ router.get("/", async (req, res) => {
         }
     }
 
+    captchaTypes = captchaTypes.filter((file) =>
+        hasAvailableCaptchaAssets(captchaTypeDir, file, isUserTargetLevel2)
+    );
+
     if (captchaTypes.length === 0) {
         return res.status(404).send("no available captcha types");
     }
@@ -353,21 +375,25 @@ router.get("/", async (req, res) => {
     const videos = Object.keys(meta).filter(key => {
         const isActive = meta[key]?.active === true;
         const videoLevel = Number(meta[key]?.level || 1);
+        const hasAsset = fs.existsSync(getCaptchaAssetPath(captchaType, key));
 
         if (isUserTargetLevel2) {
-            return isActive && videoLevel === 2;
+            return isActive && hasAsset && videoLevel === 2;
         } else {
-            return isActive && videoLevel !== 2;
+            return isActive && hasAsset && videoLevel !== 2;
         }
     });
 
     let finalVideos = videos;
     if (finalVideos.length === 0) {
-        finalVideos = Object.keys(meta).filter(key => meta[key]?.active === true);
+        finalVideos = Object.keys(meta).filter(key => (
+            meta[key]?.active === true &&
+            fs.existsSync(getCaptchaAssetPath(captchaType, key))
+        ));
     }
 
     if (finalVideos.length === 0) {
-        return res.status(404).send("no available video folders");
+        return res.status(404).send("no available captcha assets");
     }
 
     const randomVideo = finalVideos[Math.floor(Math.random() * finalVideos.length)];
@@ -392,20 +418,24 @@ router.get("/", async (req, res) => {
         shuffle(choices);
     }
 
-    const createdAt = Date.now();
-
-    db.query(
-        "INSERT INTO captcha (captchaid, answer, badtime, video, level, captchatype, userid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [id, answer, badtime, randomVideo, level, captchaType, userId, createdAt],
-        (insErr) => {
-            if (insErr) console.error("캡차 데이터 삽입 실패:", insErr);
-        }
-    );
-
     const challengeToken = crypto.randomBytes(32).toString("hex");
-    await setChallenge({ challengeToken, captchaId: id, userId }).catch((challengeErr) => {
-        console.error("Challenge store error:", challengeErr);
-    });
+
+    try {
+        await setChallenge(challengeToken, {
+            captchaId: id,
+            userId,
+            answer,
+            badtime,
+            video: randomVideo,
+            level,
+            captchatype: captchaType,
+            sessionId: req.sessionID,
+            createdAt: Date.now()
+        });
+    } catch (err) {
+        console.error("CAPTCHA create error:", err);
+        return res.status(500).json({ error: "server_error", message: "CAPTCHA creation failed" });
+    }
 
     res.json({
         captchaId: id,
@@ -417,57 +447,49 @@ router.get("/", async (req, res) => {
     });
 });
 
-router.post("/video", (req, res) => {
-    const { captchaId } = req.body;
-    db.query(
-        "SELECT * FROM captcha WHERE captchaid = ?",
-        [captchaId],
-        (err, rows) => {
+router.post("/video", async (req, res) => {
+    const { captchaId, challengeToken } = req.body;
 
-            if (err || rows.length === 0) {
-                return res.status(403).send("invalid");
-            }
+    if (!captchaId || !challengeToken) {
+        return res.status(400).json({ error: "invalid_request" });
+    }
 
-            const data = rows[0];
-            res.json({
-                video: `/mvcaptcha/asset/${data.captchaid}`
-            });
-        }
-    );
+    const data = await getChallenge(challengeToken).catch((err) => {
+        console.error("Challenge read error:", err);
+        return null;
+    });
+
+    if (!data || data.captchaId !== captchaId) {
+        return res.status(403).json({ error: "invalid_challenge" });
+    }
+
+    if (data.sessionId !== req.sessionID) {
+        return res.status(403).json({ error: "session_mismatch" });
+    }
+
+    if (!fs.existsSync(getCaptchaAssetPath(data.captchatype, data.video))) {
+        return res.status(404).json({ error: "asset_not_found" });
+    }
+
+    return res.json({
+        video: `/mvcaptcha/asset/${data.captchatype}/${data.video}`
+    });
 });
 
-router.get("/asset/:captchaId", (req, res) => {
-    const { captchaId } = req.params;
+router.get("/asset/:captchaType/:assetName", (req, res) => {
+    const { captchaType, assetName } = req.params;
 
-    db.query(
-        "SELECT * FROM captcha WHERE captchaid = ?",
-        [captchaId],
-        (err, rows) => {
-            if (err) {
-                console.error(err);
-                return res.status(500).send("server_error");
-            }
+    if (!["A", "B", "C", "D"].includes(captchaType) || !/^[a-zA-Z0-9_-]+$/.test(assetName)) {
+        return res.status(400).send("invalid_asset");
+    }
 
-            if (rows.length === 0) {
-                return res.status(404).send("not_found");
-            }
+    const assetPath = getCaptchaAssetPath(captchaType, assetName);
 
-            const data = rows[0];
-            let assetPath = "";
+    if (!fs.existsSync(assetPath)) {
+        return res.status(404).send("asset_not_found");
+    }
 
-            if (data.captchatype === "C" || data.captchatype === "D") {
-                assetPath = path.join(__dirname, "..", "public", "videos", "captchatype", `captchatype_${data.captchatype}`, "img", `${data.video}.png`);
-            } else {
-                assetPath = path.join(__dirname, "..", "public", "videos", "captchatype", `captchatype_${data.captchatype}`, "video", `${data.video}.mp4`);
-            }
-
-            if (!fs.existsSync(assetPath)) {
-                return res.status(404).send("asset_not_found");
-            }
-
-            res.sendFile(assetPath);
-        }
-    );
+    res.sendFile(assetPath);
 });
 
 router.post("/verify", async (req, res) => {
@@ -477,13 +499,17 @@ router.post("/verify", async (req, res) => {
         return res.status(400).json({ ok: false, reason: "invalid_request" });
     }
 
-    const challenge = await consumeChallenge(challengeToken).catch((err) => {
-        console.error("Challenge consume error:", err);
+    const challenge = await getChallenge(challengeToken).catch((err) => {
+        console.error("Challenge read error:", err);
         return null;
     });
 
     if (!challenge || challenge.captchaId !== captchaId) {
         return res.status(403).json({ ok: false, reason: "captcha_not_found" });
+    }
+
+    if (challenge.sessionId !== req.sessionID) {
+        return res.status(403).json({ ok: false, reason: "session_mismatch" });
     }
 
     const userId = challenge.userId;
@@ -498,50 +524,43 @@ router.post("/verify", async (req, res) => {
         return res.status(429).json({ ok: false, reason: "too_many_requests" });
     }
 
-    db.query(
-        "SELECT * FROM captcha WHERE captchaid = ?",
-        [captchaId],
-        async (err, rows) => {
-            if (err) {
-                console.error(err);
-                return res.status(500).json({
-                    ok: false,
-                    reason: "server_error"
-                });
-            }
+    const consumedChallenge = await consumeChallenge(challengeToken).catch((err) => {
+        console.error("Challenge consume error:", err);
+        return null;
+    });
 
-            if (rows.length === 0) {
-                return res.status(404).json({
-                    ok: false,
-                    reason: "captcha_not_found"
-                });
-            }
+    if (
+        !consumedChallenge ||
+        consumedChallenge.captchaId !== captchaId ||
+        consumedChallenge.sessionId !== req.sessionID
+    ) {
+        return res.status(403).json({ ok: false, reason: "captcha_not_found" });
+    }
 
-            const data = rows[0];
-            if (data.userid !== userId) {
-                return res.status(403).json({
-                    ok: false,
-                    reason: "captcha_owner_mismatch"
-                });
-            }
+    const data = consumedChallenge;
+    if (data.userId !== userId) {
+        return res.status(403).json({
+            ok: false,
+            reason: "captcha_owner_mismatch"
+        });
+    }
 
-            const currentCaptchaLevel = Number(data.level || 1);
-            const isDStage = data.captchatype === "D" || currentCaptchaLevel === 2;
-            const makeCaptchaEvent = (captchaResult, result, message, extra = {}) => ({
-                userId,
-                captchaType: data.captchatype,
-                captchaLevel: currentCaptchaLevel,
-                captchaResult,
-                clickTime: Number(clickTime),
-                badtime: Number(data.badtime),
-                result,
-                message,
-                ...extra,
-            });
+    const currentCaptchaLevel = Number(data.level || 1);
+    const isDStage = data.captchatype === "D" || currentCaptchaLevel === 2;
+    const makeCaptchaEvent = (captchaResult, result, message, extra = {}) => ({
+        userId,
+        captchaType: data.captchatype,
+        captchaLevel: currentCaptchaLevel,
+        captchaResult,
+        clickTime: Number(clickTime),
+        badtime: Number(data.badtime),
+        result,
+        message,
+        ...extra,
+    });
 
-            if (aborted === true) {
-                recordCaptchaSecurityEvent(makeCaptchaEvent("aborted", isDStage ? "fail" : "retry", "CAPTCHA aborted"));
-                db.query("DELETE FROM captcha WHERE captchaid = ?", [captchaId]);
+    if (aborted === true) {
+        recordCaptchaSecurityEvent(makeCaptchaEvent("aborted", isDStage ? "fail" : "retry", "CAPTCHA aborted"));
 
                 if (isDStage) {
                     db.query(
@@ -591,8 +610,6 @@ router.post("/verify", async (req, res) => {
                 return res.status(400).json({ ok: false, reason: "invalid_click_time" });
             }
 
-            db.query("DELETE FROM captcha WHERE captchaid = ?", [captchaId]);
-
             const failReason = answer === "" ? "timeout" : "fail";
 
             const shouldEnterDStage =
@@ -601,7 +618,7 @@ router.post("/verify", async (req, res) => {
                 clickTimeNum >= badtimeNum &&
                 clickTimeNum <= badtimeNum + D_STAGE_WINDOW_SEC;
 
-            if (clickTimeNum + BADTIME_FAST_TOLERANCE_SEC < badtimeNum) {
+            if (clickTimeNum < badtimeNum) {
                 recordCaptchaSecurityEvent(makeCaptchaEvent("too_fast", isDStage ? "fail" : "retry", "CAPTCHA too fast", {
                     clickTime: clickTimeNum,
                     badtime: badtimeNum,
@@ -660,7 +677,7 @@ router.post("/verify", async (req, res) => {
             }
 
             
-            if (String(answer) === data.answer) {
+            if (String(answer) === String(data.answer)) {
 
                 if (isDStage) {
                     recordCaptchaSecurityEvent(makeCaptchaEvent("success", "success", "CAPTCHA success", {
@@ -774,8 +791,6 @@ router.post("/verify", async (req, res) => {
                     });
                 }
             }
-        }
-    );
 });
 
 module.exports = router;

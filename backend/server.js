@@ -326,9 +326,6 @@ const mousebehaviorRouter = require("./routes/mousebehavior")(db);
 app.use(mousebehaviorRouter);
 app.use("/mousebehavior", mousebehaviorRouter);
 
-const cleanupCaptcha = require("./routes/cleanupCaptcha");
-cleanupCaptcha(db);
-
 const port = process.env.PORT || 3001;
 
 app.listen(port, () => {
