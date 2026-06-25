@@ -50,13 +50,19 @@ const getRedisClient = async () => {
 const getCaptchaPassKey = (token) => `captcha_pass:${token}`;
 const getChallengeKey = (token) => `captcha_challenge:${token}`;
 
-const setChallenge = async ({ challengeToken, captchaId, userId }) => {
+const setChallenge = async (challengeToken, challengeData) => {
     const client = await getRedisClient();
     await client.set(
         getChallengeKey(challengeToken),
-        JSON.stringify({ captchaId, userId, createdAt: Date.now() }),
+        JSON.stringify(challengeData),
         { EX: CHALLENGE_TTL_SECONDS }
     );
+};
+
+const getChallenge = async (challengeToken) => {
+    const client = await getRedisClient();
+    const raw = await client.get(getChallengeKey(challengeToken));
+    return raw ? JSON.parse(raw) : null;
 };
 
 const consumeChallenge = async (challengeToken) => {
@@ -99,33 +105,6 @@ db.connect((err) => {
         console.error("DB connect error:", err);
         return;
     }
-
-    const createTable = `
-        CREATE TABLE IF NOT EXISTS captcha (
-            captchaid VARCHAR(100) PRIMARY KEY,
-            answer VARCHAR(10),
-            badtime DECIMAL(3,1),
-            video VARCHAR(100),
-            level INT,
-            captchatype CHAR(1),
-            userid VARCHAR(50),
-            created_at BIGINT
-        )
-    `;
-
-    db.query(createTable, (err) => {
-        if (err) {
-            console.error("table create error:", err);
-            return;
-        }
-
-        db.query("ALTER TABLE captcha ADD COLUMN userid VARCHAR(50)", (alterErr) => {
-            if (alterErr && alterErr.code !== "ER_DUP_FIELDNAME") {
-                console.error("captcha userid alter error:", alterErr);
-            }
-        });
-
-    });
 
     const createSecurityEventsTable = `
         CREATE TABLE IF NOT EXISTS security_events (
@@ -438,23 +417,19 @@ router.get("/", async (req, res) => {
         shuffle(choices);
     }
 
-    const createdAt = Date.now();
-
     const challengeToken = crypto.randomBytes(32).toString("hex");
 
     try {
-        await new Promise((resolve, reject) => {
-            db.query(
-                "INSERT INTO captcha (captchaid, answer, badtime, video, level, captchatype, userid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [id, answer, badtime, randomVideo, level, captchaType, userId, createdAt],
-                (insErr) => {
-                    if (insErr) reject(insErr);
-                    else resolve();
-                }
-            );
+        await setChallenge(challengeToken, {
+            captchaId: id,
+            userId,
+            answer,
+            badtime,
+            video: randomVideo,
+            level,
+            captchatype: captchaType,
+            createdAt: Date.now()
         });
-
-        await setChallenge({ challengeToken, captchaId: id, userId });
     } catch (err) {
         console.error("CAPTCHA create error:", err);
         return res.status(500).json({ error: "server_error", message: "CAPTCHA creation failed" });
@@ -470,27 +445,29 @@ router.get("/", async (req, res) => {
     });
 });
 
-router.post("/video", (req, res) => {
-    const { captchaId } = req.body;
-    db.query(
-        "SELECT * FROM captcha WHERE captchaid = ?",
-        [captchaId],
-        (err, rows) => {
+router.post("/video", async (req, res) => {
+    const { captchaId, challengeToken } = req.body;
 
-            if (err || rows.length === 0) {
-                return res.status(403).send("invalid");
-            }
+    if (!captchaId || !challengeToken) {
+        return res.status(400).json({ error: "invalid_request" });
+    }
 
-            const data = rows[0];
-            if (!fs.existsSync(getCaptchaAssetPath(data.captchatype, data.video))) {
-                return res.status(404).json({ error: "asset_not_found" });
-            }
+    const data = await getChallenge(challengeToken).catch((err) => {
+        console.error("Challenge read error:", err);
+        return null;
+    });
 
-            res.json({
-                video: `/mvcaptcha/asset/${data.captchatype}/${data.video}`
-            });
-        }
-    );
+    if (!data || data.captchaId !== captchaId) {
+        return res.status(403).json({ error: "invalid_challenge" });
+    }
+
+    if (!fs.existsSync(getCaptchaAssetPath(data.captchatype, data.video))) {
+        return res.status(404).json({ error: "asset_not_found" });
+    }
+
+    return res.json({
+        video: `/mvcaptcha/asset/${data.captchatype}/${data.video}`
+    });
 });
 
 router.get("/asset/:captchaType/:assetName", (req, res) => {
@@ -507,40 +484,6 @@ router.get("/asset/:captchaType/:assetName", (req, res) => {
     }
 
     res.sendFile(assetPath);
-});
-
-router.get("/asset/:captchaId", (req, res) => {
-    const { captchaId } = req.params;
-
-    db.query(
-        "SELECT * FROM captcha WHERE captchaid = ?",
-        [captchaId],
-        (err, rows) => {
-            if (err) {
-                console.error(err);
-                return res.status(500).send("server_error");
-            }
-
-            if (rows.length === 0) {
-                return res.status(404).send("not_found");
-            }
-
-            const data = rows[0];
-            let assetPath = "";
-
-            if (data.captchatype === "C" || data.captchatype === "D") {
-                assetPath = path.join(__dirname, "..", "public", "videos", "captchatype", `captchatype_${data.captchatype}`, "img", `${data.video}.png`);
-            } else {
-                assetPath = path.join(__dirname, "..", "public", "videos", "captchatype", `captchatype_${data.captchatype}`, "video", `${data.video}.mp4`);
-            }
-
-            if (!fs.existsSync(assetPath)) {
-                return res.status(404).send("asset_not_found");
-            }
-
-            res.sendFile(assetPath);
-        }
-    );
 });
 
 router.post("/verify", async (req, res) => {
@@ -571,50 +514,30 @@ router.post("/verify", async (req, res) => {
         return res.status(429).json({ ok: false, reason: "too_many_requests" });
     }
 
-    db.query(
-        "SELECT * FROM captcha WHERE captchaid = ?",
-        [captchaId],
-        async (err, rows) => {
-            if (err) {
-                console.error(err);
-                return res.status(500).json({
-                    ok: false,
-                    reason: "server_error"
-                });
-            }
+    const data = challenge;
+    if (data.userId !== userId) {
+        return res.status(403).json({
+            ok: false,
+            reason: "captcha_owner_mismatch"
+        });
+    }
 
-            if (rows.length === 0) {
-                return res.status(404).json({
-                    ok: false,
-                    reason: "captcha_not_found"
-                });
-            }
+    const currentCaptchaLevel = Number(data.level || 1);
+    const isDStage = data.captchatype === "D" || currentCaptchaLevel === 2;
+    const makeCaptchaEvent = (captchaResult, result, message, extra = {}) => ({
+        userId,
+        captchaType: data.captchatype,
+        captchaLevel: currentCaptchaLevel,
+        captchaResult,
+        clickTime: Number(clickTime),
+        badtime: Number(data.badtime),
+        result,
+        message,
+        ...extra,
+    });
 
-            const data = rows[0];
-            if (data.userid !== userId) {
-                return res.status(403).json({
-                    ok: false,
-                    reason: "captcha_owner_mismatch"
-                });
-            }
-
-            const currentCaptchaLevel = Number(data.level || 1);
-            const isDStage = data.captchatype === "D" || currentCaptchaLevel === 2;
-            const makeCaptchaEvent = (captchaResult, result, message, extra = {}) => ({
-                userId,
-                captchaType: data.captchatype,
-                captchaLevel: currentCaptchaLevel,
-                captchaResult,
-                clickTime: Number(clickTime),
-                badtime: Number(data.badtime),
-                result,
-                message,
-                ...extra,
-            });
-
-            if (aborted === true) {
-                recordCaptchaSecurityEvent(makeCaptchaEvent("aborted", isDStage ? "fail" : "retry", "CAPTCHA aborted"));
-                db.query("DELETE FROM captcha WHERE captchaid = ?", [captchaId]);
+    if (aborted === true) {
+        recordCaptchaSecurityEvent(makeCaptchaEvent("aborted", isDStage ? "fail" : "retry", "CAPTCHA aborted"));
 
                 if (isDStage) {
                     db.query(
@@ -663,8 +586,6 @@ router.post("/verify", async (req, res) => {
             if (!Number.isFinite(clickTimeNum)) {
                 return res.status(400).json({ ok: false, reason: "invalid_click_time" });
             }
-
-            db.query("DELETE FROM captcha WHERE captchaid = ?", [captchaId]);
 
             const failReason = answer === "" ? "timeout" : "fail";
 
@@ -733,7 +654,7 @@ router.post("/verify", async (req, res) => {
             }
 
             
-            if (String(answer) === data.answer) {
+            if (String(answer) === String(data.answer)) {
 
                 if (isDStage) {
                     recordCaptchaSecurityEvent(makeCaptchaEvent("success", "success", "CAPTCHA success", {
@@ -847,8 +768,6 @@ router.post("/verify", async (req, res) => {
                     });
                 }
             }
-        }
-    );
 });
 
 module.exports = router;

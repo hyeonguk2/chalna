@@ -281,7 +281,8 @@ export default function HomePage() {
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                captchaId: data.captchaId
+                captchaId: data.captchaId,
+                challengeToken: data.challengeToken
             })
         });
         if (!videoRes.ok) {
