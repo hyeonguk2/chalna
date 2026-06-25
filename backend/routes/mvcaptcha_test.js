@@ -148,9 +148,11 @@ function makeChallenge(captchaType, selectedAsset, userId) {
     let question = item.question || `[TEST] ${captchaType} ${selectedAsset.assetName}`;
     let badtime = Number(item.badtime || 1);
     let options = Array.isArray(item.options) ? [...item.options] : [];
+    let testQuestionIndex = null;
 
     if (captchaType === "A" && Array.isArray(item.options) && item.options.length > 0) {
-        answer = Math.floor(Math.random() * item.options.length);
+        answer = crypto.randomInt(item.options.length);
+        testQuestionIndex = answer + 1;
         question = item.options[answer].question || question;
         badtime = Number(item.options[answer].badtime || badtime);
         options = item.options.map((option) => option.badtime);
@@ -176,6 +178,7 @@ function makeChallenge(captchaType, selectedAsset, userId) {
         type: captchaType,
         currentLevel: captchaType === "D" ? "D" : Number(item.level || 1),
         testAsset: selectedAsset.assetName,
+        testQuestionIndex,
         testIndex: selectedAsset.index,
         testTotal: selectedAsset.total,
     };
