@@ -14,7 +14,6 @@ const LOCKOUT_DURATIONS_MS = [
     30 * 60 * 1000,
 ];
 const CAPTCHA_PASS_TTL_SECONDS = 2 * 60;
-const BADTIME_FAST_TOLERANCE_SEC = 0.15;
 const D_STAGE_WINDOW_SEC = Number(process.env.D_STAGE_WINDOW_SEC || 0.5);
 const CHALLENGE_TTL_SECONDS = 5 * 60;
 const CAPTCHA_START_RATE_LIMIT_WINDOW_SECONDS = 60;
@@ -619,7 +618,7 @@ router.post("/verify", async (req, res) => {
                 clickTimeNum >= badtimeNum &&
                 clickTimeNum <= badtimeNum + D_STAGE_WINDOW_SEC;
 
-            if (clickTimeNum + BADTIME_FAST_TOLERANCE_SEC < badtimeNum) {
+            if (clickTimeNum < badtimeNum) {
                 recordCaptchaSecurityEvent(makeCaptchaEvent("too_fast", isDStage ? "fail" : "retry", "CAPTCHA too fast", {
                     clickTime: clickTimeNum,
                     badtime: badtimeNum,
