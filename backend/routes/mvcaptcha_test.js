@@ -2,6 +2,7 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const { createClient } = require("redis");
 const path = require("path");
 const fs = require("fs");
 
@@ -11,6 +12,7 @@ const router = express.Router();
 const TEST_CAPTCHA_TYPE = "A";
 
 const VALID_TYPES = ["A", "B", "C", "D"];
+const CAPTCHA_PASS_TTL_SECONDS = 2 * 60;
 const challengeStore = new Map();
 const cursors = {
     A: 0,
@@ -23,6 +25,43 @@ const collator = new Intl.Collator(undefined, {
     numeric: true,
     sensitivity: "base",
 });
+
+const redisClient = createClient({
+    url: process.env.REDIS_URL || "redis://localhost:6379",
+});
+
+redisClient.on("error", (err) => {
+    console.error("Redis Client Error:", err);
+});
+
+const redisReady = redisClient.connect().catch((err) => {
+    console.error("Redis connect error:", err);
+});
+
+const getRedisClient = async () => {
+    await redisReady;
+
+    if (!redisClient.isOpen) {
+        throw new Error("Redis is not connected");
+    }
+
+    return redisClient;
+};
+
+const getCaptchaPassKey = (token) => `captcha_pass:${token}`;
+
+const storeCaptchaPass = async (userId) => {
+    const token = crypto.randomBytes(32).toString("hex");
+    const client = await getRedisClient();
+
+    await client.set(
+        getCaptchaPassKey(token),
+        JSON.stringify({ userId, createdAt: Date.now() }),
+        { EX: CAPTCHA_PASS_TTL_SECONDS }
+    );
+
+    return token;
+};
 
 function getAssetKind(captchaType) {
     return captchaType === "C" || captchaType === "D" ? "img" : "video";
@@ -69,6 +108,7 @@ function readMeta(captchaType) {
 function getAssets(captchaType) {
     const assetDir = getAssetDir(captchaType);
     const extension = getAssetExtension(captchaType);
+    const meta = readMeta(captchaType);
 
     if (!fs.existsSync(assetDir)) {
         return [];
@@ -77,6 +117,7 @@ function getAssets(captchaType) {
     return fs.readdirSync(assetDir)
         .filter((file) => path.extname(file).toLowerCase() === extension)
         .map((file) => path.basename(file, extension))
+        .filter((assetName) => meta[assetName]?.active === true)
         .sort((a, b) => collator.compare(a, b));
 }
 
@@ -97,7 +138,7 @@ function getNextAsset(captchaType) {
     };
 }
 
-function makeChallenge(captchaType, selectedAsset) {
+function makeChallenge(captchaType, selectedAsset, userId) {
     const meta = readMeta(captchaType);
     const item = meta[selectedAsset.assetName] || {};
     const captchaId = crypto.randomBytes(16).toString("hex");
@@ -109,9 +150,9 @@ function makeChallenge(captchaType, selectedAsset) {
     let options = Array.isArray(item.options) ? [...item.options] : [];
 
     if (captchaType === "A" && Array.isArray(item.options) && item.options.length > 0) {
-        answer = 0;
-        question = item.options[0].question || question;
-        badtime = Number(item.options[0].badtime || badtime);
+        answer = Math.floor(Math.random() * item.options.length);
+        question = item.options[answer].question || question;
+        badtime = Number(item.options[answer].badtime || badtime);
         options = item.options.map((option) => option.badtime);
     } else if (answer !== "" && !options.includes(answer)) {
         options = [answer, ...options];
@@ -121,6 +162,7 @@ function makeChallenge(captchaType, selectedAsset) {
         captchaId,
         captchaType,
         assetName: selectedAsset.assetName,
+        userId,
         answer,
         badtime,
         createdAt: Date.now(),
@@ -141,6 +183,7 @@ function makeChallenge(captchaType, selectedAsset) {
 
 router.get("/", (req, res) => {
     const captchaType = TEST_CAPTCHA_TYPE;
+    const userId = String(req.query.userId || "");
 
     if (!VALID_TYPES.includes(captchaType)) {
         return res.status(400).json({ error: "invalid_test_captcha_type" });
@@ -152,7 +195,7 @@ router.get("/", (req, res) => {
         return res.status(404).json({ error: "no_test_assets", type: captchaType });
     }
 
-    return res.json(makeChallenge(captchaType, selectedAsset));
+    return res.json(makeChallenge(captchaType, selectedAsset, userId));
 });
 
 router.post("/video", (req, res) => {
@@ -189,7 +232,7 @@ router.get("/asset/:captchaType/:assetName", (req, res) => {
     return res.sendFile(assetPath);
 });
 
-router.post("/verify", (req, res) => {
+router.post("/verify", async (req, res) => {
     const { captchaId, challengeToken, answer } = req.body;
     const challenge = challengeStore.get(challengeToken);
 
@@ -198,10 +241,45 @@ router.post("/verify", (req, res) => {
     }
 
     challengeStore.delete(challengeToken);
+    const ok = String(answer) === String(challenge.answer);
+
+    if (!ok) {
+        return res.json({
+            ok: false,
+            reason: "fail",
+            testAnswer: challenge.answer,
+            testAsset: challenge.assetName,
+        });
+    }
+
+    if (!challenge.userId) {
+        return res.status(400).json({
+            ok: false,
+            reason: "missing_user",
+            testAnswer: challenge.answer,
+            testAsset: challenge.assetName,
+        });
+    }
+
+    const passToken = await storeCaptchaPass(challenge.userId).catch((err) => {
+        console.error("CAPTCHA test pass store error:", err);
+        return null;
+    });
+
+    if (!passToken) {
+        return res.status(500).json({
+            ok: false,
+            reason: "db_error",
+            testAnswer: challenge.answer,
+            testAsset: challenge.assetName,
+        });
+    }
 
     return res.json({
-        ok: String(answer) === String(challenge.answer),
-        reason: String(answer) === String(challenge.answer) ? "success" : "fail",
+        ok: true,
+        reason: "success",
+        clearAll: true,
+        captchaToken: passToken,
         testAnswer: challenge.answer,
         testAsset: challenge.assetName,
     });
