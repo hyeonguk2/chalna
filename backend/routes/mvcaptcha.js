@@ -253,6 +253,8 @@ router.get("/", async (req, res) => {
         return res.status(400).json({ error: "invalid_request" });
     }
 
+    req.session.captchaStartedAt = Date.now();
+
     const startLimitKey = `rl:captcha_start:${req.ip}:${userId}`;
     const startAllowed = await recordRateLimit(startLimitKey, CAPTCHA_START_RATE_LIMIT_MAX, CAPTCHA_START_RATE_LIMIT_WINDOW_SECONDS).catch(() => false);
     if (!startAllowed) {
@@ -428,6 +430,7 @@ router.get("/", async (req, res) => {
             video: randomVideo,
             level,
             captchatype: captchaType,
+            sessionId: req.sessionID,
             createdAt: Date.now()
         });
     } catch (err) {
@@ -459,6 +462,10 @@ router.post("/video", async (req, res) => {
 
     if (!data || data.captchaId !== captchaId) {
         return res.status(403).json({ error: "invalid_challenge" });
+    }
+
+    if (data.sessionId !== req.sessionID) {
+        return res.status(403).json({ error: "session_mismatch" });
     }
 
     if (!fs.existsSync(getCaptchaAssetPath(data.captchatype, data.video))) {
@@ -493,13 +500,17 @@ router.post("/verify", async (req, res) => {
         return res.status(400).json({ ok: false, reason: "invalid_request" });
     }
 
-    const challenge = await consumeChallenge(challengeToken).catch((err) => {
-        console.error("Challenge consume error:", err);
+    const challenge = await getChallenge(challengeToken).catch((err) => {
+        console.error("Challenge read error:", err);
         return null;
     });
 
     if (!challenge || challenge.captchaId !== captchaId) {
         return res.status(403).json({ ok: false, reason: "captcha_not_found" });
+    }
+
+    if (challenge.sessionId !== req.sessionID) {
+        return res.status(403).json({ ok: false, reason: "session_mismatch" });
     }
 
     const userId = challenge.userId;
@@ -514,7 +525,20 @@ router.post("/verify", async (req, res) => {
         return res.status(429).json({ ok: false, reason: "too_many_requests" });
     }
 
-    const data = challenge;
+    const consumedChallenge = await consumeChallenge(challengeToken).catch((err) => {
+        console.error("Challenge consume error:", err);
+        return null;
+    });
+
+    if (
+        !consumedChallenge ||
+        consumedChallenge.captchaId !== captchaId ||
+        consumedChallenge.sessionId !== req.sessionID
+    ) {
+        return res.status(403).json({ ok: false, reason: "captcha_not_found" });
+    }
+
+    const data = consumedChallenge;
     if (data.userId !== userId) {
         return res.status(403).json({
             ok: false,

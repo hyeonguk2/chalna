@@ -262,7 +262,9 @@ export default function HomePage() {
         const params = new URLSearchParams({ userId: loginUsername });
         if (forceType) params.set("forceType", forceType);
 
-        const res = await fetch(`${API}/mvcaptcha?${params.toString()}`);
+        const res = await fetch(`${API}/mvcaptcha?${params.toString()}`, {
+            credentials: "include"
+        });
         const data = await res.json().catch(() => ({}));
 
         if (!res.ok) {
