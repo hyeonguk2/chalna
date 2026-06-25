@@ -10,7 +10,7 @@ const fs = require("fs");
 const router = express.Router();
 
 // Change only this value for testing: "A", "B", "C", or "D".
-const TEST_CAPTCHA_TYPE = "A";
+const TEST_CAPTCHA_TYPE = "B";
 
 const VALID_TYPES = ["A", "B", "C", "D"];
 const CAPTCHA_PASS_TTL_SECONDS = 2 * 60;
@@ -300,6 +300,13 @@ function getAssetPath(captchaType, assetName) {
     return path.join(getAssetDir(captchaType), `${assetName}${getAssetExtension(captchaType)}`);
 }
 
+function shuffle(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = crypto.randomInt(i + 1);
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+}
+
 function readMeta(captchaType) {
     const metaPath = path.join(getTypeDir(captchaType), "meta.json");
 
@@ -368,6 +375,9 @@ function makeChallenge(captchaType, selectedAsset, userId) {
         options = item.options.map((option) => option.badtime);
     } else if (answer !== "" && !options.includes(answer)) {
         options = [answer, ...options];
+        shuffle(options);
+    } else if (captchaType !== "A") {
+        shuffle(options);
     }
 
     challengeStore.set(challengeToken, {
