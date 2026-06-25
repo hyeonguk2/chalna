@@ -1,3 +1,5 @@
+//env에 추가 => MVCAPTCHA_TEST=1
+
 const express = require("express");
 const crypto = require("crypto");
 const path = require("path");
