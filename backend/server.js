@@ -320,7 +320,7 @@ app.post("/signup", async (req, res) => {
     }
 });
 
-app.use("/mvcaptcha", require("./routes/mvcaptcha"));
+app.use("/mvcaptcha", require(process.env.MVCAPTCHA_TEST === "1" ? "./routes/mvcaptcha_test" : "./routes/mvcaptcha"));
 
 const mousebehaviorRouter = require("./routes/mousebehavior")(db);
 app.use(mousebehaviorRouter);
