@@ -301,59 +301,59 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
-                  <div className="mt-2 flex justify-between text-xs text-zinc-500">
-                    <span>과거</span>
-                    <span>최신</span>
-                  </div>
                 </div>
+              </div>
+              <div className="mt-2 flex justify-between text-xs text-zinc-500">
+                <span>과거</span>
+                <span>최신</span>
               </div>
             </div>
           </div>
 
-          <div className="rounded-2xl border border-white/10 bg-zinc-900/70 p-6">
+          <div className="rounded-2xl border border-white/10 bg-zinc-900/70 p-4">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-xl font-semibold text-white">마우스 이상 탐지</h2>
-                <Tooltip text="움직임 데이터, 정규화 선형성, 클릭 패턴에서 더해진 점수가 60점 이상이면 이상으로 판정합니다." />
+              <div className="flex items-center gap-2">
+                  <h2 className="text-lg font-semibold text-white">마우스 이상 탐지</h2>
+                  <Tooltip text="마우스 이상 탐지는 세 가지 축으로 계산합니다. 좌표 수가 너무 적은지, 이동 경로가 너무 직선적인지, 클릭 유지 시간이 지나치게 일정한지를 보고 점수를 합산합니다. 총점이 60점 이상이면 이상으로 판정합니다." />
                 </div>
-                <p className="mt-1 text-sm text-zinc-400">어떤 항목 때문에 점수가 더해졌는지 표시</p>
+                <p className="mt-1 text-xs text-zinc-400">핵심 항목만 요약 표시</p>
               </div>
               <span className={`rounded-full border border-white/10 bg-white/5 px-3 py-1 text-sm ${botStatus.text}`}>
                 {botScore >= 60 ? "이상" : "정상"}
               </span>
             </div>
 
-            <div className="mt-6 rounded-xl border border-white/5 bg-zinc-950/60 p-5">
+            <div className="mt-4 rounded-xl border border-white/5 bg-zinc-950/60 p-4">
               <div className="mb-3 flex items-end justify-between">
                 <div>
-                  <p className="text-sm text-zinc-400">최종 봇 점수</p>
-                  <p className="mt-1 text-4xl font-semibold text-white">{formatNumber(botScore, "점")}</p>
+                  <p className="text-xs text-zinc-400">최종 봇 점수</p>
+                  <p className="mt-1 text-3xl font-semibold text-white">{formatNumber(botScore, "점")}</p>
                 </div>
-                <p className="text-sm text-zinc-500">임계값 60점</p>
+                <p className="text-xs text-zinc-500">임계값 60점</p>
               </div>
-              <div className="h-3 overflow-hidden rounded-full bg-zinc-800">
+              <div className="h-2.5 overflow-hidden rounded-full bg-zinc-800">
                 <div
                   className={`h-full rounded-full ${botScore >= 60 ? "bg-red-400" : "bg-emerald-400"}`}
                   style={{ width: `${clampPercent(botScore)}%` }}
                 />
               </div>
-              <div className="mt-2 flex justify-between text-xs text-zinc-500">
+              <div className="mt-1.5 flex justify-between text-[11px] text-zinc-500">
                 <span>0 정상</span>
                 <span className="text-red-300">60 이상</span>
                 <span>100</span>
               </div>
             </div>
 
-            <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+            <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <p className="font-medium text-white">점수 구성 그래프</p>
-                  <Tooltip text="노란 구간은 위험 점수가 더해진 항목입니다. 초록 구간은 이번 로그인에서 위험 점수를 더하지 않은 항목입니다." />
+                  <p className="text-sm font-medium text-white">점수 구성</p>
+                  <Tooltip text="각 색 막대는 한 가지 분석 항목이 최종 점수에 얼마나 기여했는지를 보여줍니다. 노란색은 위험 점수를 더한 항목이고, 초록색은 이번 로그인에서 위험 점수를 더하지 않은 항목입니다." />
                 </div>
-                <span className="text-sm text-zinc-500">합계 {formatNumber(botScore, "점")}</span>
+                <span className="text-xs text-zinc-500">합계 {formatNumber(botScore, "점")}</span>
               </div>
-              <div className="flex h-5 overflow-hidden rounded-full bg-zinc-800">
+              <div className="flex h-3 overflow-hidden rounded-full bg-zinc-800">
                 {mouseReasons.map((item) => {
                   const score = Math.max(Number(item.score) || 0, 0);
                   return (
@@ -366,38 +366,38 @@ export default function Dashboard() {
                   );
                 })}
               </div>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-400">
+              <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-zinc-400">
                 {positiveReasons.length > 0 ? positiveReasons.map((item) => (
-                  <span key={item.label} className="rounded-lg bg-amber-400/10 px-2.5 py-1 text-amber-100">
+                  <span key={item.label} className="rounded-lg bg-amber-400/10 px-2 py-0.5 text-amber-100">
                     {item.label} +{item.score}
                   </span>
                 )) : (
-                  <span className="rounded-lg bg-emerald-400/10 px-2.5 py-1 text-emerald-100">
+                  <span className="rounded-lg bg-emerald-400/10 px-2 py-0.5 text-emerald-100">
                     위험 가산점 없음
                   </span>
                 )}
               </div>
             </div>
 
-            <div className="mt-5 grid gap-3">
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
               {mouseReasons.map((item) => {
                 const risky = item.score > 0;
                 return (
-                  <div key={item.label} className="rounded-xl border border-white/10 bg-zinc-950/40 p-4">
-                    <div className="flex items-start justify-between gap-4">
+                  <div key={item.label} className="rounded-xl border border-white/10 bg-zinc-950/40 p-3">
+                    <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="flex items-center gap-2">
-                          <p className="font-medium text-white">{item.label}</p>
+                          <p className="text-sm font-medium text-white">{item.label}</p>
                           <Tooltip text={item.detail} />
                         </div>
-                        <p className="mt-1 text-sm text-zinc-500">측정값 {item.value}</p>
+                        <p className="mt-1 text-xs text-zinc-500">측정값 {item.value}</p>
                       </div>
                       <div className="text-right">
-                        <p className={risky ? "text-amber-200" : "text-emerald-200"}>{item.result}</p>
-                        <p className="mt-1 text-sm text-zinc-500">+{item.score}점</p>
+                        <p className={`text-sm ${risky ? "text-amber-200" : "text-emerald-200"}`}>{item.result}</p>
+                        <p className="mt-1 text-xs text-zinc-500">+{item.score}점</p>
                       </div>
                     </div>
-                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-800">
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-800">
                       <div
                         className={`h-full rounded-full ${risky ? "bg-amber-400" : "bg-emerald-400"}`}
                         style={{ width: `${item.score}%` }}
@@ -407,24 +407,6 @@ export default function Dashboard() {
                 );
               })}
             </div>
-
-            <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-zinc-400">판정식</span>
-                <span className="text-zinc-200">이상 기준: 60점 이상</span>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2 text-sm">
-                {mouseReasons.map((item) => (
-                  <span key={item.label} className="rounded-lg bg-zinc-900 px-3 py-1 text-zinc-300">
-                    {item.label} +{item.score}
-                  </span>
-                ))}
-                <span className="rounded-lg bg-violet-500/10 px-3 py-1 text-violet-100">
-                  합계 {formatNumber(botScore, "점")}
-                </span>
-              </div>
-            </div>
-
           </div>
         </section>
 
@@ -466,7 +448,7 @@ export default function Dashboard() {
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-xl font-semibold text-white">최근 로그인 판정</h2>
-                  <Tooltip text="기본 표는 최신 10개 이벤트입니다. 더보기를 누르면 최근 7일 데이터가 팝업으로 열립니다." />
+                  <Tooltip text="기본 표는 가장 최근 10개 로그인 판정만 보여줍니다. 더보기를 누르면 최근 7일 동안 쌓인 로그인 판정을 팝업으로 열어 전체 흐름을 함께 확인할 수 있습니다." />
                 </div>
                 <p className="mt-1 text-sm text-zinc-400">최신 10개 데이터</p>
               </div>
@@ -474,7 +456,7 @@ export default function Dashboard() {
                 type="button"
                 onClick={showWeekRows}
                 disabled={recentLoading}
-                className="rounded-lg border border-violet-300/20 bg-violet-500/10 px-3 py-2 text-sm text-violet-100 transition hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex flex-none items-center gap-2 rounded-lg border border-violet-300/25 bg-violet-500/15 px-4 py-2.5 text-sm font-medium text-violet-50 shadow-sm shadow-violet-950/20 transition hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {recentLoading ? "불러오는 중" : "더보기"}
               </button>
@@ -522,7 +504,6 @@ export default function Dashboard() {
                 <Tooltip text={item.detail} />
               </div>
               <p className="mt-2 text-2xl font-semibold text-white">{item.value}</p>
-              <p className="mt-2 text-xs text-zinc-500">{item.detail}</p>
             </div>
           ))}
         </section>
@@ -544,8 +525,8 @@ export default function Dashboard() {
                 닫기
               </button>
             </div>
-            <div className="max-h-[calc(85vh-88px)] overflow-auto">
-              <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+            <div className="max-h-[calc(85vh-88px)] overflow-x-auto overflow-y-auto">
+              <table className="w-full min-w-[1100px] border-collapse text-left text-sm">
                 <thead className="sticky top-0 bg-zinc-950 text-zinc-400">
                   <tr>
                     <th className="px-4 py-3 font-medium">시도 ID</th>
