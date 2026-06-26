@@ -315,6 +315,7 @@ export default function HomePage() {
 
     const handleAnswer = (answer) => {
         if (!startTime) return;
+        if (!ended) return;
         if (isSubmittingRef.current) return;
 
         const timeDiffMs = new Date().getTime() - startTime;
@@ -798,7 +799,7 @@ export default function HomePage() {
                                                             <div className={`grid gap-5 ${type === "D" ? "grid-cols-3" : "grid-cols-4"}`}>
 
                                                                 
-                                                                {type === "A" &&
+                                                                {type === "A" && ended &&
                                                                     [1, 2, 3, 4].map((num) => (
                                                                         <button
                                                                             key={`a-${num}`}
@@ -812,7 +813,7 @@ export default function HomePage() {
                                                                 }
 
                                                                 
-                                                                {type !== "A" && (type !== "D" || ended) &&
+                                                                {type !== "A" && ended &&
                                                                     options.map((item, idx) => (
                                                                         <button
                                                                             key={`option-${item}-${idx}`}
