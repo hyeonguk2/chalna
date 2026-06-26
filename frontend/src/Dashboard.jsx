@@ -248,12 +248,16 @@ export default function Dashboard() {
     { id: "solve_time_asc", label: "풀이시간 짧은 순" },
     { id: "error_desc", label: "오차 큰 순" },
     { id: "error_asc", label: "오차 작은 순" },
+    { id: "behavior_warning_desc", label: "행동경고 많은 순" },
+    { id: "behavior_avg_desc", label: "행동해당 평균 높은 순" },
   ];
   const getProblemSortValue = (item, sort) => {
     if (sort.startsWith("success_rate")) return Number(item.successRate) || 0;
     if (sort.startsWith("fail")) return Number(item.fail) || 0;
     if (sort.startsWith("solve_time")) return Number(item.avgSolveTime) || 0;
     if (sort.startsWith("error")) return Number(item.avgErrorSeconds) || 0;
+    if (sort.startsWith("behavior_warning")) return Number(item.behaviorWarnings) || 0;
+    if (sort.startsWith("behavior_avg")) return Number(item.avgBehaviorMatches) || 0;
     return Number(item.total) || 0;
   };
   const filteredProblemStats = [...(captchaSolving.problemStats || []).filter(matchesStatsFilter)]
@@ -564,7 +568,7 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[980px] border-collapse text-left text-sm">
               <thead className="bg-zinc-950/80 text-zinc-400">
                 <tr>
                   <th className="px-4 py-3 font-medium">{"\uC2DC\uB3C4 ID"}</th>
@@ -574,6 +578,7 @@ export default function Dashboard() {
                   <th className="px-4 py-3 font-medium">{"\uC81C\uCD9C \uC2DC\uAC04"}</th>
                   <th className="px-4 py-3 font-medium">{"\uC815\uB2F5 \uAE30\uC900"}</th>
                   <th className="px-4 py-3 font-medium">{"\uC624\uCC28"}</th>
+                  <th className="px-4 py-3 font-medium">{"\uD589\uB3D9\uD328\uD134"}</th>
                   <th className="px-4 py-3 font-medium">{"\uACB0\uACFC"}</th>
                   <th className="px-4 py-3 font-medium">{"\uC2DC\uAC04"}</th>
                 </tr>
@@ -594,8 +599,8 @@ export default function Dashboard() {
                         captchaResultLabel: row.resultLabel,
                         rawResult: row.result,
                         message: row.resultLabel,
-                        behaviorMatches: 0,
-                        behaviorDetails: [],
+                        behaviorMatches: row.behaviorMatches,
+                        behaviorDetails: row.behaviorDetails || [],
                       })}
                       className="cursor-pointer text-zinc-200 transition hover:bg-white/[0.03]"
                     >
@@ -607,6 +612,15 @@ export default function Dashboard() {
                       <td className="px-4 py-3">{formatNumber(row.targetTime, "\uCD08")}</td>
                       <td className="px-4 py-3">{formatNumber(row.errorSeconds, "\uCD08")}</td>
                       <td className="px-4 py-3">
+                        {row.hasBehaviorData ? (
+                          <span className={`rounded-full border px-2.5 py-1 text-xs ${Number(row.behaviorMatches) > 0 ? "border-amber-400/20 bg-amber-400/10 text-amber-200" : "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"}`}>
+                            {row.behaviorLabel || `${row.behaviorMatches}/4`}
+                          </span>
+                        ) : (
+                          <span className="text-zinc-500">-</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
                         <span className={`rounded-full border px-2.5 py-1 text-xs ${success ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200" : "border-amber-400/20 bg-amber-400/10 text-amber-200"}`}>
                           {row.resultLabel}
                         </span>
@@ -616,7 +630,7 @@ export default function Dashboard() {
                   );
                 }) : (
                   <tr>
-                    <td className="px-4 py-8 text-center text-zinc-500" colSpan="9">
+                    <td className="px-4 py-8 text-center text-zinc-500" colSpan="10">
                       {"\uC544\uC9C1 \uAE30\uB85D\uB41C \uBB38\uC81C\uD480\uC774 \uC774\uBCA4\uD2B8\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."}
                     </td>
                   </tr>
@@ -668,7 +682,7 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[980px] border-collapse text-left text-sm">
               <thead className="bg-zinc-950/80 text-zinc-400">
                 <tr>
                   <th className="px-4 py-3 font-medium">{"\uBB38\uC81C \uC774\uB984"}</th>
@@ -678,6 +692,8 @@ export default function Dashboard() {
                   <th className="px-4 py-3 font-medium">{"\uC131\uACF5\uB960"}</th>
                   <th className="px-4 py-3 font-medium">{"\uD3C9\uADE0 \uD480\uC774"}</th>
                   <th className="px-4 py-3 font-medium">{"\uD3C9\uADE0 \uC624\uCC28"}</th>
+                  <th className="px-4 py-3 font-medium">{"\uD589\uB3D9\uACBD\uACE0"}</th>
+                  <th className="px-4 py-3 font-medium">{"\uD3C9\uADE0 \uD574\uB2F9"}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
@@ -690,10 +706,16 @@ export default function Dashboard() {
                     <td className="px-4 py-3">{formatNumber(item.successRate, "%")}</td>
                     <td className="px-4 py-3">{formatNumber(item.avgSolveTime, "초")}</td>
                     <td className="px-4 py-3">{formatNumber(item.avgErrorSeconds, "초")}</td>
+                    <td className="px-4 py-3">
+                      {item.behaviorDataCount > 0 ? `${item.behaviorWarnings}/${item.behaviorDataCount}건` : "-"}
+                    </td>
+                    <td className="px-4 py-3">
+                      {item.behaviorDataCount > 0 ? formatNumber(item.avgBehaviorMatches, "개") : "-"}
+                    </td>
                   </tr>
                 )) : (
                   <tr>
-                    <td className="px-4 py-8 text-center text-zinc-500" colSpan="7">
+                    <td className="px-4 py-8 text-center text-zinc-500" colSpan="9">
                       {"\uC544\uC9C1 \uBB38\uC81C\uBCC4 \uD1B5\uACC4 \uB370\uC774\uD130\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."}
                     </td>
                   </tr>
@@ -746,7 +768,7 @@ export default function Dashboard() {
                   ["제출 시간", formatNumber(selectedEvent.clickTime, "초")],
                   ["정답 기준", formatNumber(selectedEvent.targetTime, "초")],
                   ["오차", formatNumber(selectedEvent.errorSeconds, "초")],
-                  ["행동패턴 해당", `${selectedEvent.behaviorMatches ?? 0}/4`],
+                  ["행동패턴 해당", selectedEvent.behaviorMatches === null || selectedEvent.behaviorMatches === undefined ? "-" : `${selectedEvent.behaviorMatches}/4`],
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
                     <p className="text-xs text-zinc-500">{label}</p>

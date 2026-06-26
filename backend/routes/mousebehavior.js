@@ -484,7 +484,26 @@ module.exports = (db) => {
         return result || "-";
     };
 
-    const formatCaptchaSolvingRow = (event) => {
+    const emptyBehaviorInfo = {
+        behaviorMatches: null,
+        behaviorDetails: [],
+        behaviorLabel: "-",
+        hasBehaviorData: false,
+    };
+
+    const getBehaviorInfo = (event) => {
+        const analysisDetails = parseJsonArray(event?.analysis_details);
+        const behaviorMatches = analysisDetails.filter((item) => item.matched === true).length;
+
+        return {
+            behaviorMatches,
+            behaviorDetails: analysisDetails,
+            behaviorLabel: `${behaviorMatches}/4`,
+            hasBehaviorData: analysisDetails.length > 0,
+        };
+    };
+
+    const formatCaptchaSolvingRow = (event, behaviorInfo = emptyBehaviorInfo) => {
         const clickTime = toFiniteNumber(event.click_time);
         const targetTime = toFiniteNumber(event.badtime);
         const errorSeconds = clickTime !== null && targetTime !== null
@@ -502,6 +521,10 @@ module.exports = (db) => {
             clickTime,
             targetTime,
             errorSeconds,
+            behaviorMatches: behaviorInfo.behaviorMatches,
+            behaviorDetails: behaviorInfo.behaviorDetails,
+            behaviorLabel: behaviorInfo.behaviorLabel,
+            hasBehaviorData: behaviorInfo.hasBehaviorData,
             time: formatTime(event.created_at),
             phase: "captcha",
         };
@@ -872,7 +895,27 @@ module.exports = (db) => {
                 counts[key] = (counts[key] || 0) + 1;
                 return counts;
             }, {});
-            const captchaProblemStats = Object.values(captchaEvents.reduce((groups, event) => {
+
+            const findLinkedLoginBehavior = (captchaEvent) => {
+                if (!captchaEvent.userid) return emptyBehaviorInfo;
+
+                const captchaCreatedAt = Number(captchaEvent.created_at) || 0;
+                const matchedLogin = loginEvents
+                    .filter((event) => (
+                        event.userid === captchaEvent.userid
+                        && Number(event.created_at) >= captchaCreatedAt
+                    ))
+                    .sort((a, b) => Number(a.created_at) - Number(b.created_at))[0];
+
+                return matchedLogin ? getBehaviorInfo(matchedLogin) : emptyBehaviorInfo;
+            };
+
+            const captchaEventsWithBehavior = captchaEvents.map((event) => ({
+                ...event,
+                behaviorInfo: findLinkedLoginBehavior(event),
+            }));
+
+            const captchaProblemStats = Object.values(captchaEventsWithBehavior.reduce((groups, event) => {
                 const name = event.captcha_name || "-";
                 const clickTime = toFiniteNumber(event.click_time);
                 const targetTime = toFiniteNumber(event.badtime);
@@ -890,6 +933,9 @@ module.exports = (db) => {
                         fail: 0,
                         solveTimes: [],
                         errors: [],
+                        behaviorDataCount: 0,
+                        behaviorWarnings: 0,
+                        behaviorMatches: [],
                     };
                 }
 
@@ -901,6 +947,13 @@ module.exports = (db) => {
                 }
                 if (clickTime !== null) groups[name].solveTimes.push(clickTime);
                 if (errorSeconds !== null) groups[name].errors.push(errorSeconds);
+                if (event.behaviorInfo?.hasBehaviorData) {
+                    groups[name].behaviorDataCount += 1;
+                    groups[name].behaviorMatches.push(event.behaviorInfo.behaviorMatches);
+                    if (event.behaviorInfo.behaviorMatches > 0) {
+                        groups[name].behaviorWarnings += 1;
+                    }
+                }
 
                 return groups;
             }, {}))
@@ -914,10 +967,15 @@ module.exports = (db) => {
                     successRate: item.total > 0 ? Math.round((item.success / item.total) * 1000) / 10 : 0,
                     avgSolveTime: average(item.solveTimes),
                     avgErrorSeconds: average(item.errors),
+                    behaviorDataCount: item.behaviorDataCount,
+                    behaviorWarnings: item.behaviorWarnings,
+                    behaviorWarningRate: item.behaviorDataCount > 0 ? Math.round((item.behaviorWarnings / item.behaviorDataCount) * 1000) / 10 : null,
+                    avgBehaviorMatches: average(item.behaviorMatches),
                 }))
                 .sort((a, b) => b.total - a.total)
                 .slice(0, 8);
-            const latestCaptchaRows = captchaEvents.slice(0, 8).map(formatCaptchaSolvingRow);
+            const latestCaptchaRows = captchaEventsWithBehavior.slice(0, 8)
+                .map((event) => formatCaptchaSolvingRow(event, event.behaviorInfo));
 
             const recentLogins = loginEvents.slice(0, 12);
             const riskTrend = [...recentLogins]
