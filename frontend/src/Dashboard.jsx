@@ -113,6 +113,7 @@ export default function Dashboard() {
   const [statsTypeFilter, setStatsTypeFilter] = useState("all");
   const [problemSort, setProblemSort] = useState("total_desc");
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
 
@@ -144,6 +145,34 @@ export default function Dashboard() {
   useEffect(() => {
     loadDashboard();
   }, []);
+
+  const exportDashboard = async () => {
+    try {
+      setExporting(true);
+      const res = await fetch("/api/dashboard/security/export", { credentials: "include" });
+
+      if (!res.ok) throw new Error("dashboard export failed");
+
+      const blob = await res.blob();
+      const contentDisposition = res.headers.get("Content-Disposition") || "";
+      const fileNameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+      const fileName = fileNameMatch?.[1] || `security-dashboard-${new Date().toISOString().slice(0, 10)}.xls`;
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      alert("엑셀 파일을 저장하지 못했습니다.");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const openEventDetail = (event) => {
     setSelectedEvent(event);
@@ -313,6 +342,29 @@ export default function Dashboard() {
             <span className="text-sm text-zinc-500">
               {loading ? "불러오는 중" : error || (lastUpdatedAt ? `마지막 업데이트 ${new Date(lastUpdatedAt).toLocaleTimeString("ko-KR", { hour12: false })}` : "수동 업데이트")}
             </span>
+            <button
+              type="button"
+              onClick={exportDashboard}
+              disabled={exporting}
+              className="inline-flex items-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-400/10 px-4 py-2 text-sm text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path d="M14 2v6h6" />
+                <path d="M12 18v-6" />
+                <path d="m9 15 3 3 3-3" />
+              </svg>
+              {exporting ? "저장 중" : "엑셀 저장"}
+            </button>
             <button
               type="button"
               onClick={loadDashboard}

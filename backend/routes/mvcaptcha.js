@@ -24,6 +24,18 @@ const CAPTCHA_VERIFY_RATE_LIMIT_MAX = 30;
 const getLockoutDuration = (lockoutCount) =>
     LOCKOUT_DURATIONS_MS[Math.min(Math.max(lockoutCount, 1), LOCKOUT_DURATIONS_MS.length) - 1];
 
+const clearCaptchaLockoutSql = "login_attempts = 0, captcha_level = 1, lockout_time = 0, lockout_count = 0";
+const captchaSequenceState = new Map();
+
+const getSequentialCaptchaItem = (sequenceKey, items) => {
+    if (items.length === 0) return null;
+
+    const index = captchaSequenceState.get(sequenceKey) || 0;
+    const item = items[index % items.length];
+    captchaSequenceState.set(sequenceKey, (index + 1) % items.length);
+    return item;
+};
+
 const redisClient = createClient({
     url: process.env.REDIS_URL || "redis://localhost:6379",
 });
@@ -316,7 +328,7 @@ router.get("/", async (req, res) => {
                     userData.lockout_time = 0;
                 }
 
-                if (userData.captchatype) {
+                if (userData.captchatype && Number(userData.captcha_level || 1) === 2) {
                     const filteredTypes = captchaTypes.filter(file => !file.endsWith(`_${userData.captchatype}`));
                     if (filteredTypes.length > 0) captchaTypes = filteredTypes;
                 }
@@ -346,11 +358,7 @@ router.get("/", async (req, res) => {
     if (isUserTargetLevel2) {
         effectiveForcedCaptchaType = "D";
     } else {
-        captchaTypes = captchaTypes.filter(file => file !== "captchatype_D");
-
-        if (effectiveForcedCaptchaType === "D") {
-            effectiveForcedCaptchaType = null;
-        }
+        effectiveForcedCaptchaType = "A";
     }
 
     if (effectiveForcedCaptchaType) {
@@ -372,7 +380,7 @@ router.get("/", async (req, res) => {
     }
 
     const randomCaptchaType = captchaTypes[Math.floor(Math.random() * captchaTypes.length)];
-    const captchaType = effectiveForcedCaptchaType === "D" ? "D" : randomCaptchaType.replace("captchatype_", "");
+    const captchaType = randomCaptchaType.replace("captchatype_", "");
 
     const metaPath = path.join(captchaTypeDir, randomCaptchaType, "meta.json");
     if (!fs.existsSync(metaPath)) {
@@ -404,7 +412,22 @@ router.get("/", async (req, res) => {
         return res.status(404).send("no available captcha assets");
     }
 
-    const randomVideo = finalVideos[Math.floor(Math.random() * finalVideos.length)];
+    let randomVideo = finalVideos[Math.floor(Math.random() * finalVideos.length)];
+    let sequentialOptionIndex = null;
+
+    if (!isUserTargetLevel2 && captchaType === "A") {
+        const sequenceItems = finalVideos.flatMap((videoKey) => (
+            Array.isArray(meta[videoKey]?.options)
+                ? meta[videoKey].options.map((_, optionIndex) => ({ videoKey, optionIndex }))
+                : [{ videoKey, optionIndex: null }]
+        ));
+        const sequenceItem = getSequentialCaptchaItem(`level1:A:${userId}`, sequenceItems);
+
+        if (sequenceItem) {
+            randomVideo = sequenceItem.videoKey;
+            sequentialOptionIndex = sequenceItem.optionIndex;
+        }
+    }
 
     let answer;
     let question;
@@ -414,7 +437,9 @@ router.get("/", async (req, res) => {
 
     if (captchaType === "A") {
         const options = meta[randomVideo].options;
-        answer = Math.floor(Math.random() * options.length);
+        answer = Number.isInteger(sequentialOptionIndex)
+            ? sequentialOptionIndex
+            : Math.floor(Math.random() * options.length);
         question = options[answer].question;
         badtime = options[answer].badtime;
         choices = options.map(option => option.badtime);
@@ -573,42 +598,34 @@ router.post("/verify", async (req, res) => {
 
                 if (isDStage) {
                     db.query(
-                        "UPDATE users SET login_attempts = GREATEST(COALESCE(login_attempts, 0), 1) + 1, captchatype = NULL, captcha_level = 1, lockout_time = ?, lockout_count = CASE WHEN COALESCE(login_attempts, 0) < 2 THEN COALESCE(lockout_count, 0) + 1 ELSE COALESCE(lockout_count, 0) END WHERE userid = ?",
-                        [Date.now(), userId],
+                        `UPDATE users SET ${clearCaptchaLockoutSql}, captchatype = NULL WHERE userid = ?`,
+                        [userId],
                         (updateErr) => {
                             if (updateErr) console.error("레벨 2 오답 후 초기화 실패:", updateErr);
                             return res.json({
                                 ok: false,
                                 reason: "aborted",
                                 level2_fail: true,
-                                locked: true
+                                locked: false
                             });
                         }
                     );
                 } else {
-                    db.query("SELECT login_attempts, lockout_count FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
-                        const currentAttempts = Math.max(0, Number(userRows[0]?.login_attempts || 0));
-                        const nextAttempts = currentAttempts + 1;
-                        const now = nextAttempts >= 2 ? Date.now() : 0;
-                        const lockoutIncrement = currentAttempts < 2 && nextAttempts >= 2 ? 1 : 0;
-
-                        db.query(
-                            "UPDATE users SET login_attempts = ?, captchatype = ?, captcha_level = 1, lockout_time = ?, lockout_count = COALESCE(lockout_count, 0) + ? WHERE userid = ?",
-                            [nextAttempts, data.captchatype, now, lockoutIncrement, userId],
-                            (updateErr) => {
-                                if (updateErr) {
-                                    console.error(updateErr);
-                                    return res.status(500).json({ ok: false, reason: "db_error" });
-                                }
-                                return res.json({
-                                    ok: false,
-                                    reason: "aborted",
-                                    locked: nextAttempts >= 2,
-                                    remainingSec: nextAttempts >= 2 ? Math.ceil(getLockoutDuration(Math.max(1, Number(userRows[0]?.lockout_count || 0) + lockoutIncrement)) / 1000) : undefined
-                                });
+                    db.query(
+                        `UPDATE users SET ${clearCaptchaLockoutSql}, captchatype = ? WHERE userid = ?`,
+                        [data.captchatype, userId],
+                        (updateErr) => {
+                            if (updateErr) {
+                                console.error(updateErr);
+                                return res.status(500).json({ ok: false, reason: "db_error" });
                             }
-                        );
-                    });
+                            return res.json({
+                                ok: false,
+                                reason: "aborted",
+                                locked: false
+                            });
+                        }
+                    );
                 }
                 return;
             }
@@ -633,41 +650,9 @@ router.post("/verify", async (req, res) => {
                     badtime: badtimeNum,
                 }));
                 if (isDStage) {
-                    db.query("SELECT login_attempts, lockout_count FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
-                        const currentAttempts = Math.max(1, Number(userRows[0]?.login_attempts || 0));
-                        const nextAttempts = currentAttempts + 1;
-                        const now = nextAttempts >= 2 ? Date.now() : 0;
-                        const lockoutIncrement = currentAttempts < 2 && nextAttempts >= 2 ? 1 : 0;
-
-                        db.query(
-                            "UPDATE users SET login_attempts = ?, captchatype = NULL, captcha_level = 1, lockout_time = ?, lockout_count = COALESCE(lockout_count, 0) + ? WHERE userid = ?",
-                            [nextAttempts, now, lockoutIncrement, userId],
-                            (updateErr) => {
-                                if (updateErr) {
-                                    console.error(updateErr);
-                                    return res.status(500).json({ ok: false, reason: "db_error" });
-                                }
-                                return res.json({
-                                    ok: false,
-                                    reason: "too_fast",
-                                    level2_fail: true,
-                                    locked: true
-                                });
-                            }
-                        );
-                    });
-                    return;
-                }
-
-                db.query("SELECT login_attempts, lockout_count FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
-                    const currentAttempts = Math.max(0, Number(userRows[0]?.login_attempts || 0));
-                    const nextAttempts = currentAttempts + 1;
-                    const now = nextAttempts >= 2 ? Date.now() : 0;
-                    const lockoutIncrement = currentAttempts < 2 && nextAttempts >= 2 ? 1 : 0;
-
                     db.query(
-                        "UPDATE users SET login_attempts = ?, captchatype = ?, captcha_level = 1, lockout_time = ?, lockout_count = COALESCE(lockout_count, 0) + ? WHERE userid = ?",
-                        [nextAttempts, data.captchatype, now, lockoutIncrement, userId],
+                        `UPDATE users SET ${clearCaptchaLockoutSql}, captchatype = NULL WHERE userid = ?`,
+                        [userId],
                         (updateErr) => {
                             if (updateErr) {
                                 console.error(updateErr);
@@ -676,12 +661,29 @@ router.post("/verify", async (req, res) => {
                             return res.json({
                                 ok: false,
                                 reason: "too_fast",
-                                locked: nextAttempts >= 2,
-                                remainingSec: nextAttempts >= 2 ? Math.ceil(getLockoutDuration(Math.max(1, Number(userRows[0]?.lockout_count || 0) + lockoutIncrement)) / 1000) : undefined
+                                level2_fail: true,
+                                locked: false
                             });
                         }
                     );
-                });
+                    return;
+                }
+
+                db.query(
+                    `UPDATE users SET ${clearCaptchaLockoutSql}, captchatype = ? WHERE userid = ?`,
+                    [data.captchatype, userId],
+                    (updateErr) => {
+                        if (updateErr) {
+                            console.error(updateErr);
+                            return res.status(500).json({ ok: false, reason: "db_error" });
+                        }
+                        return res.json({
+                            ok: false,
+                            reason: "too_fast",
+                            locked: false
+                        });
+                    }
+                );
                 return;
             }
 
@@ -761,43 +763,35 @@ router.post("/verify", async (req, res) => {
                 if (isDStage) {
 
                     db.query(
-                        "UPDATE users SET login_attempts = GREATEST(COALESCE(login_attempts, 0), 1) + 1, captchatype = NULL, captcha_level = 1, lockout_time = ?, lockout_count = CASE WHEN COALESCE(login_attempts, 0) < 2 THEN COALESCE(lockout_count, 0) + 1 ELSE COALESCE(lockout_count, 0) END WHERE userid = ?",
-                        [Date.now(), userId],
+                        `UPDATE users SET ${clearCaptchaLockoutSql}, captchatype = NULL WHERE userid = ?`,
+                        [userId],
                         (updateErr) => {
                             if (updateErr) console.error("레벨 2 오답 후 초기화 실패:", updateErr);
                             return res.json({
                                 ok: false,
                                 reason: failReason,
                                 level2_fail: true,
-                                locked: true
+                                locked: false
                             });
                         }
                     );
                 } else {
 
-                    db.query("SELECT login_attempts, lockout_count FROM users WHERE userid = ?", [userId], (selErr, userRows) => {
-                        const currentAttempts = Math.max(0, Number(userRows[0]?.login_attempts || 0));
-                        const nextAttempts = currentAttempts + 1;
-                        const now = nextAttempts >= 2 ? Date.now() : 0;
-                        const lockoutIncrement = currentAttempts < 2 && nextAttempts >= 2 ? 1 : 0;
-
-                        db.query(
-                            "UPDATE users SET login_attempts = ?, captchatype = ?, captcha_level = 1, lockout_time = ?, lockout_count = COALESCE(lockout_count, 0) + ? WHERE userid = ?",
-                            [nextAttempts, data.captchatype, now, lockoutIncrement, userId],
-                            (updateErr) => {
-                                if (updateErr) {
-                                    console.error(updateErr);
-                                    return res.status(500).json({ ok: false, reason: "db_error" });
-                                }
-                                return res.json({
-                                    ok: false,
-                                    reason: failReason,
-                                    locked: nextAttempts >= 2,
-                                    remainingSec: nextAttempts >= 2 ? Math.ceil(getLockoutDuration(Math.max(1, Number(userRows[0]?.lockout_count || 0) + lockoutIncrement)) / 1000) : undefined
-                                });
+                    db.query(
+                        `UPDATE users SET ${clearCaptchaLockoutSql}, captchatype = ? WHERE userid = ?`,
+                        [data.captchatype, userId],
+                        (updateErr) => {
+                            if (updateErr) {
+                                console.error(updateErr);
+                                return res.status(500).json({ ok: false, reason: "db_error" });
                             }
-                        );
-                    });
+                            return res.json({
+                                ok: false,
+                                reason: failReason,
+                                locked: false
+                            });
+                        }
+                    );
                 }
             }
 });

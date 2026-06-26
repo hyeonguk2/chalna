@@ -37,6 +37,56 @@ const getSessionKey = (token) => `session:${token}`;
 const getCaptchaPassKey = (token) => `captcha_pass:${token}`;
 const getLoginRateLimitKey = (ip, userid) => `rl:login:${ip}:${userid}`;
 
+const escapeXml = (value) => String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const formatExcelDateTime = (createdAt) => {
+    const date = new Date(Number(createdAt));
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString("ko-KR", { hour12: false });
+};
+
+const excelCell = (value) => {
+    if (value === null || value === undefined || value === "") {
+        return "<Cell><Data ss:Type=\"String\"></Data></Cell>";
+    }
+
+    const number = Number(value);
+    if (typeof value !== "string" && Number.isFinite(number)) {
+        return `<Cell><Data ss:Type="Number">${number}</Data></Cell>`;
+    }
+
+    return `<Cell><Data ss:Type="String">${escapeXml(value)}</Data></Cell>`;
+};
+
+const excelRow = (cells) => `<Row>${cells.map(excelCell).join("")}</Row>`;
+
+const excelSheet = (name, rows) => `
+    <Worksheet ss:Name="${escapeXml(name).slice(0, 31)}">
+        <Table>${rows.map(excelRow).join("")}</Table>
+    </Worksheet>`;
+
+const createSecurityEventsExcel = ({ summaryRows, captchaTypeRows, problemRows, eventRows }) => `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+    xmlns:o="urn:schemas-microsoft-com:office:office"
+    xmlns:x="urn:schemas-microsoft-com:office:excel"
+    xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+    <Styles>
+        <Style ss:ID="Default" ss:Name="Normal">
+            <Alignment ss:Vertical="Center"/>
+            <Font ss:FontName="Arial" ss:Size="10"/>
+        </Style>
+    </Styles>
+    ${excelSheet("요약", summaryRows)}
+    ${excelSheet("타입별 결과", captchaTypeRows)}
+    ${excelSheet("문제별 통계", problemRows)}
+    ${excelSheet("원본 이벤트", eventRows)}
+</Workbook>`;
+
 const getCookie = (req, name) => {
     const cookieHeader = req.headers.cookie || "";
     const cookies = cookieHeader.split(";").map((cookie) => cookie.trim());
@@ -1039,6 +1089,169 @@ module.exports = (db) => {
         } catch (error) {
             console.error("dashboard security api error:", error);
             res.status(500).json({ message: "대시보드 데이터를 불러오지 못했습니다." });
+        }
+    });
+
+    router.get("/api/dashboard/security/export", async (req, res) => {
+        try {
+            const events = await query(
+                `SELECT * FROM security_events
+                 ORDER BY created_at DESC`
+            );
+
+            const captchaEvents = events.filter((event) => event.phase === "captcha");
+            const loginEvents = events.filter((event) => event.phase === "login");
+            const captchaPassed = captchaEvents.filter((event) => event.captcha_result === "success").length;
+            const captchaPassRate = captchaEvents.length > 0
+                ? Math.round((captchaPassed / captchaEvents.length) * 1000) / 10
+                : 0;
+            const mouseAnomalies = loginEvents.filter(hasMatchedBehaviorFlag).length;
+            const blocked = events.filter((event) => event.result === "blocked").length;
+
+            const summaryRows = [
+                ["항목", "값"],
+                ["생성 시각", formatExcelDateTime(Date.now())],
+                ["전체 이벤트", events.length],
+                ["CAPTCHA 이벤트", captchaEvents.length],
+                ["로그인 이벤트", loginEvents.length],
+                ["CAPTCHA 통과율(%)", captchaPassRate],
+                ["행동패턴 경고", mouseAnomalies],
+                ["차단/락아웃", blocked],
+            ];
+
+            const captchaTypeRows = [
+                ["타입", "레벨", "성공", "실패", "전체", "성공률(%)"],
+                ...["A", "B", "C", "D"].map((type) => {
+                    const byType = captchaEvents.filter((event) => event.captcha_type === type);
+                    const resultCounts = countCaptchaResults(byType);
+                    const total = resultCounts.pass + resultCounts.fail;
+                    return [
+                        type,
+                        getCaptchaLevel(type),
+                        resultCounts.pass,
+                        resultCounts.fail,
+                        total,
+                        total > 0 ? Math.round((resultCounts.pass / total) * 1000) / 10 : 0,
+                    ];
+                }),
+            ];
+
+            const captchaProblemStats = Object.values(captchaEvents.reduce((groups, event) => {
+                const name = event.captcha_name || "-";
+                const clickTime = toFiniteNumber(event.click_time);
+                const targetTime = toFiniteNumber(event.badtime);
+                const errorSeconds = clickTime !== null && targetTime !== null
+                    ? Math.abs(clickTime - targetTime)
+                    : null;
+
+                if (!groups[name]) {
+                    groups[name] = {
+                        name,
+                        type: event.captcha_type || "-",
+                        level: event.captcha_level || (event.captcha_type ? getCaptchaLevel(event.captcha_type) : "-"),
+                        total: 0,
+                        success: 0,
+                        fail: 0,
+                        solveTimes: [],
+                        errors: [],
+                    };
+                }
+
+                groups[name].total += 1;
+                if (event.captcha_result === "success") groups[name].success += 1;
+                else groups[name].fail += 1;
+                if (clickTime !== null) groups[name].solveTimes.push(clickTime);
+                if (errorSeconds !== null) groups[name].errors.push(errorSeconds);
+
+                return groups;
+            }, {})).sort((a, b) => b.total - a.total);
+
+            const problemRows = [
+                ["문제 이름", "타입", "레벨", "전체", "성공", "실패", "성공률(%)", "평균 풀이 시간(초)", "평균 오차(초)"],
+                ...captchaProblemStats.map((item) => [
+                    item.name,
+                    item.type,
+                    item.level,
+                    item.total,
+                    item.success,
+                    item.fail,
+                    item.total > 0 ? Math.round((item.success / item.total) * 1000) / 10 : 0,
+                    average(item.solveTimes),
+                    average(item.errors),
+                ]),
+            ];
+
+            const eventRows = [
+                [
+                    "ID",
+                    "시각",
+                    "단계",
+                    "사용자",
+                    "CAPTCHA 타입",
+                    "CAPTCHA 이름",
+                    "CAPTCHA 레벨",
+                    "CAPTCHA 결과",
+                    "마우스 결과",
+                    "봇 점수",
+                    "궤적 포인트",
+                    "선형성 지표",
+                    "클릭 유지 편차",
+                    "클릭 쌍",
+                    "제출 시점",
+                    "정답 시점",
+                    "오차",
+                    "최종 결과",
+                    "메시지",
+                    "행동패턴 상세",
+                    "궤적 샘플",
+                ],
+                ...events.map((event) => {
+                    const clickTime = toFiniteNumber(event.click_time);
+                    const targetTime = toFiniteNumber(event.badtime);
+                    const errorSeconds = clickTime !== null && targetTime !== null
+                        ? Math.abs(clickTime - targetTime)
+                        : "";
+
+                    return [
+                        event.id,
+                        formatExcelDateTime(event.created_at),
+                        event.phase === "captcha" ? "문제풀이" : "로그인",
+                        event.userid || "",
+                        event.captcha_type || "",
+                        event.captcha_name || "",
+                        event.captcha_level || "",
+                        getCaptchaResultLabel(event.captcha_result),
+                        event.mouse_result || "",
+                        event.bot_score ?? "",
+                        event.trajectory_points ?? "",
+                        event.linear_mse ?? "",
+                        event.click_hold_std ?? "",
+                        event.click_pairs ?? "",
+                        clickTime ?? "",
+                        targetTime ?? "",
+                        errorSeconds,
+                        getStatusLabel(event),
+                        event.message || "",
+                        event.analysis_details || "",
+                        event.trajectory_sample || "",
+                    ];
+                }),
+            ];
+
+            const workbook = createSecurityEventsExcel({
+                summaryRows,
+                captchaTypeRows,
+                problemRows,
+                eventRows,
+            });
+            const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+
+            res.setHeader("Content-Type", "application/vnd.ms-excel; charset=utf-8");
+            res.setHeader("Content-Disposition", `attachment; filename="security-dashboard-${timestamp}.xls"`);
+            return res.send(workbook);
+        } catch (error) {
+            console.error("dashboard export api error:", error);
+            return res.status(500).json({ message: "엑셀 파일을 생성하지 못했습니다." });
         }
     });
 

@@ -5,6 +5,7 @@ import "./App.css";
 export default function HomePage() {
     const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
     const ANSWER_TIME_LIMIT_MS = 5000;
+    const MAX_CAPTCHA_ATTEMPTS = 2;
     const MAX_TRAJECTORY_POINTS = 800;
     const MAX_CLICK_EVENTS = 120;
     const IMAGE_DISPLAY_SECONDS = {
@@ -24,6 +25,7 @@ export default function HomePage() {
     const imgIntervalRef = useRef(null);
     const loginTransitionRef = useRef(null);
     const isSubmittingRef = useRef(false);
+    const captchaFailCountRef = useRef(0);
     const behaviorMetricsRef = useRef({
         mouseTrajectory: [],
         clickData: []
@@ -225,6 +227,7 @@ export default function HomePage() {
 
         if (!isCaptchaPassed) {
             resetBehaviorMetrics();
+            captchaFailCountRef.current = 0;
             reset();
             const credentialsValid = await precheckCredentials();
             if (!credentialsValid) return;
@@ -248,6 +251,7 @@ export default function HomePage() {
             setCaptchaToken("");
             setLoginError("");
             setIsLoggingIn(false);
+            captchaFailCountRef.current = 0;
             resetBehaviorMetrics();
         }
     };
@@ -401,6 +405,7 @@ export default function HomePage() {
             }
 
             if (data.reason === "success") {
+                captchaFailCountRef.current = 0;
                 setIsCaptchaPassed(true);
                 setCaptchaToken(data.captchaToken || "");
                 setChallengeToken("");
@@ -416,10 +421,37 @@ export default function HomePage() {
             setIsCaptchaPassed(false);
             setCaptchaToken("");
             setChallengeToken("");
+            captchaFailCountRef.current += 1;
+
+            if (captchaFailCountRef.current >= MAX_CAPTCHA_ATTEMPTS) {
+                reset();
+                setCaptchaopen(false);
+                setLoginError("CAPTCHA 인증에 2회 실패했습니다. 다시 시도해 주세요.");
+                return;
+            }
+
             setResult(data.reason || "fail");
+            loginTransitionRef.current = setTimeout(() => {
+                startCaptcha(currentLevel === "D" || type === "D" ? "D" : "");
+            }, 700);
         } catch (error) {
             console.error("검증 중 오류 발생:", error);
+            setIsCaptchaPassed(false);
+            setCaptchaToken("");
+            setChallengeToken("");
+            captchaFailCountRef.current += 1;
+
+            if (captchaFailCountRef.current >= MAX_CAPTCHA_ATTEMPTS) {
+                reset();
+                setCaptchaopen(false);
+                setLoginError("CAPTCHA 인증에 2회 실패했습니다. 다시 시도해 주세요.");
+                return;
+            }
+
             setResult("fail");
+            loginTransitionRef.current = setTimeout(() => {
+                startCaptcha(currentLevel === "D" || type === "D" ? "D" : "");
+            }, 700);
         } finally {
             isSubmittingRef.current = false;
             setIsSubmittingCaptcha(false);
