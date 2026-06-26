@@ -111,6 +111,7 @@ db.connect((err) => {
             phase ENUM('captcha','login') NOT NULL,
             userid VARCHAR(50),
             captcha_type CHAR(1),
+            captcha_name VARCHAR(255),
             captcha_level INT,
             captcha_result VARCHAR(30),
             mouse_result VARCHAR(80),
@@ -149,17 +150,23 @@ db.connect((err) => {
                 console.error("security_events analysis_details alter error:", alterErr);
             }
         });
+
+        db.query("ALTER TABLE security_events ADD COLUMN captcha_name VARCHAR(255) AFTER captcha_type", (alterErr) => {
+            if (alterErr && alterErr.code !== "ER_DUP_FIELDNAME") {
+                console.error("security_events captcha_name alter error:", alterErr);
+            }
+        });
     });
 });
 
 function recordCaptchaSecurityEvent(event) {
     const sql = `
         INSERT INTO security_events (
-            phase, userid, captcha_type, captcha_level, captcha_result,
+            phase, userid, captcha_type, captcha_name, captcha_level, captcha_result,
             mouse_result, bot_score, trajectory_points, linear_mse,
             click_hold_std, click_pairs, trajectory_sample, analysis_details,
             click_time, badtime, result, message, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     db.query(
@@ -168,6 +175,7 @@ function recordCaptchaSecurityEvent(event) {
             "captcha",
             event.userId || null,
             event.captchaType || null,
+            event.captchaName || null,
             event.captchaLevel || null,
             event.captchaResult,
             null,
@@ -550,6 +558,7 @@ router.post("/verify", async (req, res) => {
     const makeCaptchaEvent = (captchaResult, result, message, extra = {}) => ({
         userId,
         captchaType: data.captchatype,
+        captchaName: data.video,
         captchaLevel: currentCaptchaLevel,
         captchaResult,
         clickTime: Number(clickTime),

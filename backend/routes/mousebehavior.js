@@ -167,185 +167,158 @@ const formatMetric = (value, digits = 2) => {
     return Number(value).toFixed(digits);
 };
 
-// ==========================================
-// 2. 인지적 직관 기반 봇 판별 알고리즘
-// ==========================================
-const analyzeBotBehavior = (metrics) => {
-    let botScore = 0;
-    let linearMse = null;
-    let mouseReason = "정상 흔들림";
+const toFiniteNumber = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+};
+
+const average = (items) => {
+    const numbers = items
+        .map(toFiniteNumber)
+        .filter((value) => value !== null);
+
+    if (numbers.length === 0) return null;
+    return numbers.reduce((sum, value) => sum + value, 0) / numbers.length;
+};
+
+const parseJsonArray = (rawValue) => {
+    if (!rawValue) return [];
+    try {
+        const parsed = typeof rawValue === "string" ? JSON.parse(rawValue) : rawValue;
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+        return [];
+    }
+};
+
+const hasMatchedBehaviorFlag = (event) =>
+    parseJsonArray(event.analysis_details).some((item) => item && item.matched === true);
+
+const createBehaviorDetail = ({ id, label, value, matched, result, detail }) => ({
+    id,
+    label,
+    value,
+    matched,
+    result,
+    detail,
+});
+
+const summarizeBehaviorFlags = (details) => {
+    const matched = details.filter((item) => item.matched);
+    if (matched.length === 0) return "정상";
+    return matched.map((item) => item.label).join(", ");
+};
+
+const analyzeBehaviorFlags = (metrics) => {
+    const traj = Array.isArray(metrics.mouseTrajectory) ? metrics.mouseTrajectory : [];
+    const clicks = Array.isArray(metrics.clickData) ? metrics.clickData : [];
     const details = [];
+    let linearMse = null;
+    let speedCv = null;
+    let straightness = null;
 
-    // --- [1] 마우스 궤적 분석 ---
-    const traj = metrics.mouseTrajectory || [];
+    const trajectoryTooShort = traj.length < 10;
 
-    if (traj.length === 0) {
-        botScore += 35;
-        mouseReason = "궤적 없음";
-        details.push({
-            label: "움직임 데이터",
-            value: "0개",
-            result: "없음",
-            score: 35,
-            detail: "마우스 좌표가 전혀 없으면 API 자동 호출 가능성을 의심합니다.",
-        });
-    } else if (traj.length < 10) {
-        botScore += 20;
-        mouseReason = "궤적 부족";
-        details.push({
-            label: "움직임 데이터",
-            value: `${traj.length}개`,
-            result: "부족",
-            score: 20,
-            detail: "좌표가 10개 미만이면 분석 신뢰도가 낮아 위험 점수를 일부 더합니다.",
-        });
-    } else {
-        const xCoords = traj.map(pt => pt.x);
-        const yCoords = traj.map(pt => pt.y);
-        const xStdDev = calculateStdDev(xCoords);
-        const yStdDev = calculateStdDev(yCoords);
-
-        if (xStdDev === 0 && yStdDev === 0) {
-            botScore += 35;
-            mouseReason = "수직 고정 궤적";
-            details.push({
-                label: "움직임 데이터",
-                value: `${traj.length}개`,
-                result: "좌표 고정",
-                score: 35,
-                detail: "좌표 개수는 있지만 위치 변화가 없으면 실제 마우스 이동으로 보기 어렵습니다.",
-            });
-        } else {
-            let totalDistance = 0;
-            const speeds = [];
-            for (let i = 1; i < traj.length; i++) {
-                const distance = getDistance(traj[i - 1], traj[i]);
-                const dt = Math.max(Number(traj[i].t) - Number(traj[i - 1].t), 1);
-                totalDistance += distance;
-                speeds.push(distance / dt);
-            }
-
-            const directDistance = getDistance(traj[0], traj[traj.length - 1]);
-            const straightness = totalDistance > 0 ? directDistance / totalDistance : 0;
-            const meanSpeed = speeds.length > 0 ? calculateMean(speeds) : 0;
-            const speedStdDev = calculateStdDev(speeds);
-            const speedCv = meanSpeed > 0 ? speedStdDev / meanSpeed : null;
-
-            details.push({
-                label: "움직임 데이터",
-                value: `${traj.length}개`,
-                result: "충분",
-                score: 0,
-                detail: "좌표 수가 충분해서 경로 형태와 속도 패턴을 분석했습니다.",
-            });
-
-            const baseline = Math.max(getDistance(traj[0], traj[traj.length - 1]), 1);
-            let squaredDeviationSum = 0;
-            for (let i = 0; i < traj.length; i++) {
-                const deviation = getPointToLineDistance(traj[i], traj[0], traj[traj.length - 1]);
-                squaredDeviationSum += Math.pow(deviation, 2);
-            }
-            const rmsDeviation = Math.sqrt(squaredDeviationSum / traj.length);
-            linearMse = Number.isFinite((rmsDeviation / baseline) * 100)
-                ? (rmsDeviation / baseline) * 100
-                : null;
-
-            if (linearMse !== null && linearMse < 1.2 && straightness > 0.985 && totalDistance > 100) {
-                botScore += 35;
-                mouseReason = "직선 이동";
-                details.push({
-                    label: "이동 경로",
-                    value: `편차 ${formatMetric(linearMse)}%, 직선도 ${formatMetric(straightness)}`,
-                    result: "너무 직선적",
-                    score: 35,
-                    detail: "시작점-끝점 기준 편차가 작고 총 이동거리 대비 직선성이 너무 높으면 자동 생성 경로로 의심합니다.",
-                });
-            } else {
-                details.push({
-                    label: "이동 경로",
-                    value: `편차 ${formatMetric(linearMse)}%, 직선도 ${formatMetric(straightness)}`,
-                    result: "자연스러움",
-                    score: 0,
-                    detail: "시작점-끝점 기준 편차가 충분하고 전체 이동도 완전히 직선적이지 않습니다.",
-                });
-            }
-
-            if (speedCv !== null && speedCv < 0.15 && speeds.length >= 10) {
-                botScore += 20;
-                mouseReason = mouseReason === "정상 흔들림" ? "속도 일정" : `${mouseReason}, 속도 일정`;
-                details.push({
-                    label: "속도 변화",
-                    value: `CV ${formatMetric(speedCv)}`,
-                    result: "너무 일정",
-                    score: 20,
-                    detail: "마우스 속도 변화율이 지나치게 낮으면 사람이 움직인 패턴으로 보기 어렵습니다.",
-                });
-            } else {
-                details.push({
-                    label: "속도 변화",
-                    value: speedCv === null ? "-" : `CV ${formatMetric(speedCv)}`,
-                    result: "정상 변동",
-                    score: 0,
-                    detail: "속도가 충분히 변해 사람이 움직인 패턴에 가깝습니다.",
-                });
-            }
+    let totalDistance = 0;
+    const speeds = [];
+    if (traj.length >= 2) {
+        for (let i = 1; i < traj.length; i++) {
+            const distance = getDistance(traj[i - 1], traj[i]);
+            const dt = Math.max(Number(traj[i].t) - Number(traj[i - 1].t), 1);
+            totalDistance += distance;
+            speeds.push(distance / dt);
         }
+
+        const baseline = Math.max(getDistance(traj[0], traj[traj.length - 1]), 1);
+        straightness = totalDistance > 0 ? getDistance(traj[0], traj[traj.length - 1]) / totalDistance : 0;
+
+        let squaredDeviationSum = 0;
+        for (let i = 0; i < traj.length; i++) {
+            const deviation = getPointToLineDistance(traj[i], traj[0], traj[traj.length - 1]);
+            squaredDeviationSum += Math.pow(deviation, 2);
+        }
+
+        const rmsDeviation = Math.sqrt(squaredDeviationSum / traj.length);
+        linearMse = Number.isFinite((rmsDeviation / baseline) * 100)
+            ? (rmsDeviation / baseline) * 100
+            : null;
+
+        const meanSpeed = speeds.length > 0 ? calculateMean(speeds) : 0;
+        const speedStdDev = calculateStdDev(speeds);
+        speedCv = meanSpeed > 0 ? speedStdDev / meanSpeed : null;
     }
 
-    // --- [2] 클릭 타이밍 분포 분석 ---
-    const clicks = metrics.clickData || [];
-    const holdTimes = [];
+    const tooStraight = !trajectoryTooShort
+        && linearMse !== null
+        && linearMse < 1.2
+        && straightness > 0.985
+        && totalDistance > 100;
 
+    const speedTooConstant = !trajectoryTooShort
+        && speedCv !== null
+        && speedCv < 0.15
+        && speeds.length >= 10;
+
+    const holdTimes = [];
     for (let i = 0; i < clicks.length - 1; i++) {
         const c1 = clicks[i];
         const c2 = clicks[i + 1];
-
-        if (c1.type === 'down' && c2.type === 'up') {
-            holdTimes.push(c2.t - c1.t);
+        if (c1.type === "down" && c2.type === "up") {
+            holdTimes.push(Number(c2.t) - Number(c1.t));
         }
     }
 
-    if (holdTimes.length > 0) {
-        const stdDev = calculateStdDev(holdTimes);
-        if (holdTimes.length >= 2 && stdDev < 5.0) {
-            botScore += 25;
-            mouseReason = mouseReason === "정상 흔들림" ? "클릭 간격 일정" : `${mouseReason}, 클릭 일정`;
-            details.push({
-                label: "클릭 패턴",
-                value: `${formatMetric(stdDev, 1)}ms`,
-                result: "반복 의심",
-                score: 25,
-                detail: "여러 클릭의 누름 시간이 거의 같으면 자동 클릭 가능성을 의심합니다.",
-            });
-        } else {
-            details.push({
-                label: "클릭 패턴",
-                value: `${formatMetric(stdDev, 1)}ms`,
-                result: "정상 편차",
-                score: 0,
-                detail: "클릭 유지 시간 편차가 위험 기준보다 큽니다.",
-            });
-        }
-    } else {
-        botScore += 10;
-        details.push({
-            label: "클릭 패턴",
-            value: "클릭쌍 없음",
-            result: "근거 부족",
-            score: 10,
-            detail: "클릭 down/up 쌍이 없어서 낮은 위험 점수만 더합니다.",
-        });
-    }
+    const clickHoldStd = holdTimes.length > 0 ? calculateStdDev(holdTimes) : null;
+    const clickHoldTooConstant = holdTimes.length >= 2
+        && clickHoldStd !== null
+        && clickHoldStd < 5.0;
 
-    console.log(`[Bot Detection] 트래킹 수: ${traj.length}, 클릭 쌍: ${holdTimes.length} -> 산출된 위험 점수: ${botScore}`);
+    details.push(createBehaviorDetail({
+        id: "trajectory_too_short",
+        label: "궤적 10개 미만",
+        value: `${traj.length}개`,
+        matched: trajectoryTooShort,
+        result: trajectoryTooShort ? "해당" : "해당 없음",
+        detail: "수집된 마우스 궤적 좌표가 10개 미만인지 확인합니다.",
+    }));
+
+    details.push(createBehaviorDetail({
+        id: "too_straight",
+        label: "시작점-끝점 기준 직선 이동",
+        value: linearMse === null || straightness === null
+            ? "-"
+            : `편차 ${formatMetric(linearMse)}%, 직선성 ${formatMetric(straightness)}`,
+        matched: tooStraight,
+        result: tooStraight ? "해당" : trajectoryTooShort ? "검사 생략" : "해당 없음",
+        detail: "시작점과 끝점을 잇는 기준선에서 거의 벗어나지 않고 총 이동거리 대비 직선성이 높은지 확인합니다.",
+    }));
+
+    details.push(createBehaviorDetail({
+        id: "speed_too_constant",
+        label: "속도 변화율 일정",
+        value: speedCv === null ? "-" : `CV ${formatMetric(speedCv)}`,
+        matched: speedTooConstant,
+        result: speedTooConstant ? "해당" : trajectoryTooShort ? "검사 생략" : "해당 없음",
+        detail: "연속 좌표 사이의 속도 변화율이 지나치게 일정한지 확인합니다.",
+    }));
+
+    details.push(createBehaviorDetail({
+        id: "click_hold_too_constant",
+        label: "클릭 유지 시간 일정",
+        value: clickHoldStd === null ? "클릭쌍 없음" : `${formatMetric(clickHoldStd, 1)}ms`,
+        matched: clickHoldTooConstant,
+        result: clickHoldTooConstant ? "해당" : holdTimes.length < 2 ? "검사 불가" : "해당 없음",
+        detail: "여러 클릭의 down/up 유지 시간이 지나치게 일정한지 확인합니다.",
+    }));
+
+    console.log(`[Behavior Flags] trajectory: ${traj.length}, click pairs: ${holdTimes.length}, matched: ${details.filter((item) => item.matched).length}`);
 
     return {
-        isBot: botScore >= 60,
-        botScore,
-        mouseReason,
+        matchedCount: details.filter((item) => item.matched).length,
+        mouseReason: summarizeBehaviorFlags(details),
         trajectoryPoints: traj.length,
         linearMse,
-        clickHoldStd: holdTimes.length > 0 ? calculateStdDev(holdTimes) : null,
+        clickHoldStd,
         clickPairs: holdTimes.length,
         details,
     };
@@ -369,6 +342,7 @@ module.exports = (db) => {
                 phase ENUM('captcha','login') NOT NULL,
                 userid VARCHAR(50),
                 captcha_type CHAR(1),
+                captcha_name VARCHAR(255),
                 captcha_level INT,
                 captcha_result VARCHAR(30),
                 mouse_result VARCHAR(80),
@@ -415,6 +389,15 @@ module.exports = (db) => {
                     }
                 }
             );
+
+            db.query(
+                "ALTER TABLE security_events ADD COLUMN captcha_name VARCHAR(255) AFTER captcha_type",
+                (alterErr) => {
+                    if (alterErr && alterErr.code !== "ER_DUP_FIELDNAME") {
+                        console.error("security_events captcha_name migration error:", alterErr);
+                    }
+                }
+            );
         });
     };
 
@@ -423,17 +406,18 @@ module.exports = (db) => {
     const recordSecurityEvent = (event) => {
         const sql = `
             INSERT INTO security_events (
-                phase, userid, captcha_type, captcha_level, captcha_result,
+                phase, userid, captcha_type, captcha_name, captcha_level, captcha_result,
                 mouse_result, bot_score, trajectory_points, linear_mse,
                 click_hold_std, click_pairs, trajectory_sample, analysis_details, click_time, badtime, result,
                 message, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         const values = [
             event.phase,
             event.userid || null,
             event.captchaType || null,
+            event.captchaName || null,
             event.captchaLevel || null,
             event.captchaResult || null,
             event.mouseResult || null,
@@ -490,16 +474,70 @@ module.exports = (db) => {
         fail: items.filter((event) => event.captcha_result && event.captcha_result !== "success").length,
     });
 
-    const formatSecurityEventRow = (event) => ({
-        id: `EV-${event.id}`,
-        user: event.userid || "-",
-        captcha: event.captcha_type || "-",
-        captchaLevel: event.captcha_type ? getCaptchaLevel(event.captcha_type) : "-",
-        mouse: event.mouse_result || (event.phase === "captcha" ? "CAPTCHA 판정" : "-"),
-        botScore: Number(event.bot_score) || 0,
-        result: getStatusLabel(event),
-        time: formatTime(event.created_at),
-    });
+    const getCaptchaResultLabel = (result) => {
+        if (result === "success") return "성공";
+        if (result === "too_fast") return "너무 빠름";
+        if (result === "timeout") return "시간 초과";
+        if (result === "d_stage_unlocked") return "Level 2 전환";
+        if (result === "aborted") return "중단";
+        if (result === "fail") return "실패";
+        return result || "-";
+    };
+
+    const formatCaptchaSolvingRow = (event) => {
+        const clickTime = toFiniteNumber(event.click_time);
+        const targetTime = toFiniteNumber(event.badtime);
+        const errorSeconds = clickTime !== null && targetTime !== null
+            ? Math.abs(clickTime - targetTime)
+            : null;
+
+        return {
+            id: `EV-${event.id}`,
+            user: event.userid || "-",
+            type: event.captcha_type || "-",
+            name: event.captcha_name || "-",
+            level: event.captcha_level || (event.captcha_type ? getCaptchaLevel(event.captcha_type) : "-"),
+            result: event.captcha_result || "-",
+            resultLabel: getCaptchaResultLabel(event.captcha_result),
+            clickTime,
+            targetTime,
+            errorSeconds,
+            time: formatTime(event.created_at),
+            phase: "captcha",
+        };
+    };
+
+    const formatSecurityEventRow = (event) => {
+        const analysisDetails = parseJsonArray(event.analysis_details);
+        const clickTime = toFiniteNumber(event.click_time);
+        const targetTime = toFiniteNumber(event.badtime);
+        const errorSeconds = clickTime !== null && targetTime !== null
+            ? Math.abs(clickTime - targetTime)
+            : null;
+
+        return {
+            id: `EV-${event.id}`,
+            rawId: event.id,
+            phase: event.phase,
+            phaseLabel: event.phase === "captcha" ? "문제풀이" : "로그인",
+            user: event.userid || "-",
+            captcha: event.captcha_type || "-",
+            captchaName: event.captcha_name || "-",
+            captchaLevel: event.captcha_type ? getCaptchaLevel(event.captcha_type) : "-",
+            captchaResult: event.captcha_result || "-",
+            captchaResultLabel: getCaptchaResultLabel(event.captcha_result),
+            mouse: event.mouse_result || (event.phase === "captcha" ? "CAPTCHA 판정" : "-"),
+            behaviorMatches: analysisDetails.filter((item) => item.matched === true).length,
+            behaviorDetails: analysisDetails,
+            clickTime,
+            targetTime,
+            errorSeconds,
+            result: getStatusLabel(event),
+            rawResult: event.result,
+            message: event.message || "-",
+            time: formatTime(event.created_at),
+        };
+    };
 
     router.post("/api/login-precheck", async (req, res) => {
         const { username, password } = req.body;
@@ -699,41 +737,8 @@ module.exports = (db) => {
                             message: "인증에 실패했습니다."
                         });
                     }
-                    const behaviorAnalysis = analyzeBotBehavior(payload.behaviorMetrics || {});
-                    const isBot = behaviorAnalysis.isBot;
+                    const behaviorAnalysis = analyzeBehaviorFlags(payload.behaviorMetrics || {});
                     const trajectorySample = sampleTrajectory(payload.behaviorMetrics?.mouseTrajectory);
-
-                    if (isBot) {
-                        db.query("SELECT login_attempts FROM users WHERE userid = ?", [payload.username], (selErr, rows) => {
-                            const currentAttempts = Math.max(0, Number(rows[0]?.login_attempts || 0));
-                            const nextAttempts = currentAttempts + 1;
-                            const now = nextAttempts >= 2 ? Date.now() : 0;
-                            const lockoutIncrement = currentAttempts < 2 && nextAttempts >= 2 ? 1 : 0;
-
-                            db.query(
-                                "UPDATE users SET login_attempts = ?, captcha_level = 1, lockout_time = ?, lockout_count = COALESCE(lockout_count, 0) + ? WHERE userid = ?",
-                                [nextAttempts, now, lockoutIncrement, payload.username]
-                            );
-                        });
-
-                        recordSecurityEvent({
-                            phase: "login",
-                            userid: payload.username,
-                            captchaResult: "success",
-                            mouseResult: behaviorAnalysis.mouseReason,
-                            botScore: behaviorAnalysis.botScore,
-                            trajectoryPoints: behaviorAnalysis.trajectoryPoints,
-                            linearMse: behaviorAnalysis.linearMse,
-                            clickHoldStd: behaviorAnalysis.clickHoldStd,
-                            clickPairs: behaviorAnalysis.clickPairs,
-                            trajectorySample,
-                            analysisDetails: behaviorAnalysis.details,
-                            result: "bot",
-                            message: "비정상 패턴 감지",
-                        });
-
-                        return res.json({ success: true, isBot: true, message: "인증에 실패했습니다." });
-                    }
 
                     let sessionToken;
                     try {
@@ -756,7 +761,6 @@ module.exports = (db) => {
                         userid: payload.username,
                         captchaResult: "success",
                         mouseResult: behaviorAnalysis.mouseReason,
-                        botScore: behaviorAnalysis.botScore,
                         trajectoryPoints: behaviorAnalysis.trajectoryPoints,
                         linearMse: behaviorAnalysis.linearMse,
                         clickHoldStd: behaviorAnalysis.clickHoldStd,
@@ -826,8 +830,8 @@ module.exports = (db) => {
             const captchaPassRate = captchaEvents.length > 0
                 ? Math.round((captchaPassed / captchaEvents.length) * 1000) / 10
                 : 0;
-            const mouseAnomalies = loginEvents.filter((event) => Number(event.bot_score) >= 60).length;
-            const blocked = events.filter((event) => ["blocked", "bot"].includes(event.result)).length;
+            const mouseAnomalies = loginEvents.filter(hasMatchedBehaviorFlag).length;
+            const blocked = events.filter((event) => event.result === "blocked").length;
 
             const captchaTypes = ["A", "B", "C", "D"].map((type) => {
                 const byType = captchaEvents.filter((event) => event.captcha_type === type);
@@ -853,33 +857,85 @@ module.exports = (db) => {
                 },
             ];
 
+            const timedCaptchaEvents = captchaEvents.filter((event) => toFiniteNumber(event.click_time) !== null);
+            const captchaErrors = timedCaptchaEvents
+                .map((event) => {
+                    const clickTime = toFiniteNumber(event.click_time);
+                    const targetTime = toFiniteNumber(event.badtime);
+                    return clickTime !== null && targetTime !== null
+                        ? Math.abs(clickTime - targetTime)
+                        : null;
+                })
+                .filter((value) => value !== null);
+            const captchaResultCounts = captchaEvents.reduce((counts, event) => {
+                const key = event.captcha_result || "unknown";
+                counts[key] = (counts[key] || 0) + 1;
+                return counts;
+            }, {});
+            const captchaProblemStats = Object.values(captchaEvents.reduce((groups, event) => {
+                const name = event.captcha_name || "-";
+                const clickTime = toFiniteNumber(event.click_time);
+                const targetTime = toFiniteNumber(event.badtime);
+                const errorSeconds = clickTime !== null && targetTime !== null
+                    ? Math.abs(clickTime - targetTime)
+                    : null;
+
+                if (!groups[name]) {
+                    groups[name] = {
+                        name,
+                        type: event.captcha_type || "-",
+                        level: event.captcha_level || (event.captcha_type ? getCaptchaLevel(event.captcha_type) : "-"),
+                        total: 0,
+                        success: 0,
+                        fail: 0,
+                        solveTimes: [],
+                        errors: [],
+                    };
+                }
+
+                groups[name].total += 1;
+                if (event.captcha_result === "success") {
+                    groups[name].success += 1;
+                } else {
+                    groups[name].fail += 1;
+                }
+                if (clickTime !== null) groups[name].solveTimes.push(clickTime);
+                if (errorSeconds !== null) groups[name].errors.push(errorSeconds);
+
+                return groups;
+            }, {}))
+                .map((item) => ({
+                    name: item.name,
+                    type: item.type,
+                    level: item.level,
+                    total: item.total,
+                    success: item.success,
+                    fail: item.fail,
+                    successRate: item.total > 0 ? Math.round((item.success / item.total) * 1000) / 10 : 0,
+                    avgSolveTime: average(item.solveTimes),
+                    avgErrorSeconds: average(item.errors),
+                }))
+                .sort((a, b) => b.total - a.total)
+                .slice(0, 8);
+            const latestCaptchaRows = captchaEvents.slice(0, 8).map(formatCaptchaSolvingRow);
+
             const recentLogins = loginEvents.slice(0, 12);
             const riskTrend = [...recentLogins]
                 .reverse()
-                .map((event) => Number(event.bot_score) || 0);
+                .map((event) => parseJsonArray(event.analysis_details).filter((item) => item.matched === true).length);
 
             while (riskTrend.length < 12) {
                 riskTrend.unshift(0);
             }
 
             const latestLogin = loginEvents[0] || {};
-            const latestAnomalyLogin = loginEvents.find((event) => Number(event.bot_score) >= 60) || {};
+            const latestAnomalyLogin = loginEvents.find(hasMatchedBehaviorFlag) || {};
             const recentRows = events.slice(0, 10).map(formatSecurityEventRow);
 
             const parseTrajectorySample = (rawSample) => {
                 if (!rawSample) return [];
                 try {
                     const parsed = typeof rawSample === "string" ? JSON.parse(rawSample) : rawSample;
-                    return Array.isArray(parsed) ? parsed : [];
-                } catch (error) {
-                    return [];
-                }
-            };
-
-            const parseAnalysisDetails = (rawDetails) => {
-                if (!rawDetails) return [];
-                try {
-                    const parsed = typeof rawDetails === "string" ? JSON.parse(rawDetails) : rawDetails;
                     return Array.isArray(parsed) ? parsed : [];
                 } catch (error) {
                     return [];
@@ -897,6 +953,17 @@ module.exports = (db) => {
                 },
                 captchaTypes,
                 captchaLevels,
+                captchaSolving: {
+                    total: captchaEvents.length,
+                    success: captchaResultCounts.success || 0,
+                    fail: captchaEvents.filter((event) => event.captcha_result && event.captcha_result !== "success").length,
+                    avgSolveTime: average(timedCaptchaEvents.map((event) => event.click_time)),
+                    avgTargetTime: average(timedCaptchaEvents.map((event) => event.badtime)),
+                    avgErrorSeconds: average(captchaErrors),
+                    resultCounts: captchaResultCounts,
+                    problemStats: captchaProblemStats,
+                    recentRows: latestCaptchaRows,
+                },
                 riskTrend,
                 recentRows,
                 anomalyTrajectory,
@@ -908,8 +975,7 @@ module.exports = (db) => {
                     clickHoldStd: latestLogin.click_hold_std === null || latestLogin.click_hold_std === undefined
                         ? null
                         : Number(latestLogin.click_hold_std),
-                    botScore: Number(latestLogin.bot_score) || 0,
-                    analysisDetails: parseAnalysisDetails(latestLogin.analysis_details),
+                    analysisDetails: parseJsonArray(latestLogin.analysis_details),
                 },
             });
         } catch (error) {
