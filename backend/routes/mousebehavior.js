@@ -37,6 +37,61 @@ const getSessionKey = (token) => `session:${token}`;
 const getCaptchaPassKey = (token) => `captcha_pass:${token}`;
 const getLoginRateLimitKey = (ip, userid) => `rl:login:${ip}:${userid}`;
 
+const escapeXml = (value) => String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const excelCell = (value) => {
+    if (value === null || value === undefined || value === "") {
+        return "<Cell><Data ss:Type=\"String\"></Data></Cell>";
+    }
+
+    if (typeof value === "object") {
+        return `<Cell><Data ss:Type="String">${escapeXml(JSON.stringify(value))}</Data></Cell>`;
+    }
+
+    const number = Number(value);
+    if (typeof value !== "string" && Number.isFinite(number)) {
+        return `<Cell><Data ss:Type="Number">${number}</Data></Cell>`;
+    }
+
+    return `<Cell><Data ss:Type="String">${escapeXml(value)}</Data></Cell>`;
+};
+
+const excelRow = (cells) => `<Row>${cells.map(excelCell).join("")}</Row>`;
+
+const excelSheet = (name, rows) => `
+    <Worksheet ss:Name="${escapeXml(name).slice(0, 31)}">
+        <Table>${rows.map(excelRow).join("")}</Table>
+    </Worksheet>`;
+
+const createSecurityEventsExcel = (sheets) => `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+    xmlns:o="urn:schemas-microsoft-com:office:office"
+    xmlns:x="urn:schemas-microsoft-com:office:excel"
+    xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+    <Styles>
+        <Style ss:ID="Default" ss:Name="Normal">
+            <Alignment ss:Vertical="Center"/>
+            <Font ss:FontName="Arial" ss:Size="10"/>
+        </Style>
+    </Styles>
+    ${sheets.map((sheet) => excelSheet(sheet.name, sheet.rows)).join("")}
+</Workbook>`;
+
+const formatSheetDate = (createdAt) => {
+    const date = new Date(Number(createdAt));
+    if (Number.isNaN(date.getTime())) return "날짜없음";
+
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+};
+
 const getCookie = (req, name) => {
     const cookieHeader = req.headers.cookie || "";
     const cookies = cookieHeader.split(";").map((cookie) => cookie.trim());
@@ -1039,6 +1094,47 @@ module.exports = (db) => {
         } catch (error) {
             console.error("dashboard security api error:", error);
             res.status(500).json({ message: "대시보드 데이터를 불러오지 못했습니다." });
+        }
+    });
+
+    router.get("/api/dashboard/security/export", async (req, res) => {
+        try {
+            const columns = await query("SHOW COLUMNS FROM security_events");
+            const events = await query(
+                `SELECT * FROM security_events
+                 ORDER BY created_at DESC`
+            );
+            const columnNames = columns.map((column) => column.Field);
+            const groupedByDate = events.reduce((groups, event) => {
+                const sheetDate = formatSheetDate(event.created_at);
+                if (!groups[sheetDate]) groups[sheetDate] = [];
+                groups[sheetDate].push(event);
+                return groups;
+            }, {});
+
+            const sheets = Object.keys(groupedByDate)
+                .sort((a, b) => b.localeCompare(a))
+                .map((sheetDate) => ({
+                    name: sheetDate,
+                    rows: [
+                        columnNames,
+                        ...groupedByDate[sheetDate].map((event) => (
+                            columnNames.map((columnName) => event[columnName])
+                        )),
+                    ],
+                }));
+
+            const workbook = createSecurityEventsExcel(
+                sheets.length > 0 ? sheets : [{ name: "데이터 없음", rows: [columnNames] }]
+            );
+            const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+
+            res.setHeader("Content-Type", "application/vnd.ms-excel; charset=utf-8");
+            res.setHeader("Content-Disposition", `attachment; filename="security-dashboard-${timestamp}.xls"`);
+            return res.send(workbook);
+        } catch (error) {
+            console.error("dashboard export api error:", error);
+            return res.status(500).json({ message: "엑셀 파일을 생성하지 못했습니다." });
         }
     });
 
